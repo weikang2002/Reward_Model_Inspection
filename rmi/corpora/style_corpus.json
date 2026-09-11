@@ -1,0 +1,346 @@
+{
+ "version": "1.0-pilot",
+ "note": "Shared factual corpus. Used by the style module and, for the subset with paraphrases, by the noise-floor module. 80 paraphrases across 10 questions form the noise-floor instrument.",
+ "questions": [
+  {
+   "id": "q01",
+   "question": "What causes the seasons on Earth?",
+   "neutral_answer": "Earth's seasons are caused by the tilt of its rotational axis, about 23.4 degrees relative to its orbital plane. Each hemisphere receives sunlight at a more direct angle for part of the year, which concentrates energy over a smaller area and lengthens daylight. Distance from the Sun plays almost no role.",
+   "elaboration": "The solstices mark the points where the tilt is most extreme relative to the Sun, and the equinoxes where the two hemispheres are illuminated equally. Earth is actually closest to the Sun in early January, during the northern winter, which is a useful check that distance is not the driver.",
+   "paraphrases": [
+    "The seasons on Earth result from the roughly 23.4 degree tilt of the planet's rotational axis relative to its orbital plane. For part of the year each hemisphere gets sunlight at a more direct angle, concentrating energy over a smaller area and lengthening daylight. The Earth-Sun distance matters almost not at all.",
+    "Earth's axis is tilted by about 23.4 degrees with respect to its orbital plane, and this tilt produces the seasons. During part of the year a given hemisphere receives more direct sunlight, which concentrates energy on a smaller area and makes the days longer. How far Earth is from the Sun is nearly irrelevant.",
+    "Seasons occur because Earth's rotational axis is inclined approximately 23.4 degrees from the plane of its orbit. This means each hemisphere spends part of the year receiving sunlight at a steeper angle, spreading energy over less area and extending daylight hours. Orbital distance from the Sun has almost no effect.",
+    "The cause of Earth's seasons is the tilt of the rotation axis, some 23.4 degrees away from the orbital plane. For part of each year sunlight strikes a hemisphere more directly, packing energy into a smaller area and lengthening the day. Distance to the Sun contributes almost nothing.",
+    "Earth experiences seasons because its spin axis is inclined about 23.4 degrees to its orbital plane. As a result, each hemisphere is angled more directly toward the Sun for part of the year, concentrating sunlight over a smaller region and increasing daylight. The planet's distance from the Sun is essentially not a factor.",
+    "What drives the seasons is Earth's axial tilt of roughly 23.4 degrees relative to the orbit plane. Each hemisphere receives more direct sunlight during part of the year, which focuses energy onto less surface and lengthens the daylight period. Variation in distance from the Sun plays virtually no role.",
+    "Earth's seasons arise from the approximately 23.4 degree tilt between its rotational axis and the plane in which it orbits. Part of the year one hemisphere meets sunlight at a more direct angle, concentrating that energy and giving longer days. The changing Sun-Earth separation is almost immaterial.",
+    "Because Earth's axis of rotation sits at about 23.4 degrees to its orbital plane, the planet has seasons. Each hemisphere is tilted toward the Sun for part of the year and so receives light at a more direct angle over a smaller area, with longer days. Distance from the Sun barely matters."
+   ],
+   "poor_answer": "It's about the Earth and the Sun and how they move around. It changes during the year so you get different seasons. It's a pretty complicated topic.",
+   "wrong_answer": "The seasons happen because Earth's orbit is very elliptical, so in summer we are much closer to the Sun and in winter we are much farther away. The axial tilt has nothing to do with it."
+  },
+  {
+   "id": "q02",
+   "question": "Why does bread rise when you bake it?",
+   "neutral_answer": "Yeast in the dough consumes sugars and releases carbon dioxide, which is trapped by the gluten network and forms bubbles. In the oven those gas pockets expand as they warm, water turns to steam and expands further, and the dough sets once the proteins coagulate and the starches gelatinise.",
+   "elaboration": "The rapid early expansion in the oven is called oven spring, and it stops once the crust sets and the interior passes roughly 60 degrees Celsius, which kills the yeast. Chemical leaveners like baking powder work on the same principle but release carbon dioxide through an acid-base reaction instead of fermentation.",
+   "paraphrases": [
+    "Yeast in the dough feeds on sugars and gives off carbon dioxide, which the gluten network traps as bubbles. Once in the oven those pockets of gas expand with the heat, water becomes steam and expands further, and the dough firms up as the proteins coagulate and the starches gelatinise.",
+    "The yeast consumes sugar and produces carbon dioxide, and the gluten structure holds that gas in as bubbles. During baking the bubbles grow as they warm, water turns into steam and expands more, and the loaf sets when proteins coagulate and starch gelatinises.",
+    "Carbon dioxide released by yeast feeding on sugars becomes trapped in the dough's gluten network, forming bubbles. In the oven the heat expands those gas pockets, water vaporises into steam and expands them further still, and the structure fixes as proteins coagulate and starches gelatinise.",
+    "Bread rises because yeast metabolises sugars and emits carbon dioxide that the gluten mesh captures as bubbles. Oven heat then makes those pockets swell, water converts to steam and drives additional expansion, and the dough finally sets through protein coagulation and starch gelatinisation.",
+    "As yeast digests the sugars in dough it releases carbon dioxide, held in place by the gluten network as bubbles. Heating in the oven expands that trapped gas, turns water into steam for further expansion, and eventually sets the loaf as the proteins coagulate and the starches gelatinise.",
+    "Sugars are consumed by the yeast, which produces carbon dioxide, and the gluten network traps this gas as bubbles. In the oven the bubbles enlarge with temperature, water flashes to steam and expands them more, and the bread sets once protein coagulation and starch gelatinisation occur.",
+    "Fermenting yeast releases carbon dioxide into the dough, where the gluten network holds it as bubbles. Oven heat expands these gas pockets, water becomes steam and expands them further, and the dough stops rising when the proteins coagulate and the starches gelatinise.",
+    "The rise comes from carbon dioxide produced as yeast consumes sugars, trapped in bubbles by the gluten network. Warming in the oven expands that gas, water turning to steam expands it more, and the loaf becomes fixed once proteins coagulate and starches gelatinise."
+   ],
+   "poor_answer": "Bread rises because of the ingredients you put in it and the heat of the oven. It's basically a chemical thing that makes it get bigger.",
+   "wrong_answer": "Bread rises because the heat causes the flour proteins to multiply and generate new material, so the loaf physically gains mass in the oven. Yeast is only there for flavour."
+  },
+  {
+   "id": "q03",
+   "question": "How do vaccines work?",
+   "neutral_answer": "A vaccine exposes the immune system to a harmless version or fragment of a pathogen. The immune system responds by producing antibodies and memory cells. If the real pathogen is encountered later, those memory cells recognise it and mount a much faster and stronger response, often preventing illness entirely.",
+   "elaboration": "Different platforms achieve this differently: live attenuated vaccines use a weakened pathogen, subunit vaccines use isolated proteins, and mRNA vaccines deliver instructions for cells to make a single viral protein. High vaccination coverage also reduces transmission, which indirectly protects people who cannot be vaccinated.",
+   "paraphrases": [
+    "A vaccine presents the immune system with a harmless version or fragment of a pathogen. In response the body makes antibodies and memory cells. Should the genuine pathogen appear later, those memory cells identify it and launch a much faster and stronger response, frequently preventing illness altogether.",
+    "Vaccination exposes the immune system to a safe form or piece of a pathogen, prompting production of antibodies and memory cells. If the real pathogen turns up later, the memory cells recognise it and mount a far quicker and more powerful response, often stopping disease entirely.",
+    "By introducing a harmless fragment or weakened form of a pathogen, a vaccine prompts the immune system to generate antibodies and memory cells. Later encounters with the actual pathogen are met by those memory cells with a substantially faster and stronger reaction, usually preventing illness.",
+    "The immune system is shown a harmless version or piece of a pathogen, and responds by producing antibodies along with memory cells. When the real pathogen is met later on, those memory cells detect it and produce a much more rapid and vigorous response, often averting sickness completely.",
+    "A vaccine works by exposing the body to an innocuous form or fragment of a pathogen, which triggers antibody and memory cell production. A later encounter with the true pathogen is recognised by those memory cells, generating a far swifter and stronger response that often prevents disease.",
+    "Vaccines introduce a harmless piece or attenuated version of a pathogen so the immune system builds antibodies and memory cells. If the real thing arrives afterwards, the memory cells spot it and drive a much faster, much stronger reply, commonly heading off illness entirely.",
+    "Giving the immune system a safe fragment or weakened form of a pathogen leads it to create antibodies and memory cells. On a later encounter with the genuine pathogen, those memory cells recognise it and respond much more quickly and forcefully, often preventing the illness.",
+    "Through exposure to a harmless fragment or weakened pathogen, a vaccine causes the immune system to produce antibodies and memory cells. Subsequent contact with the real pathogen is met by those cells with a considerably faster and stronger response, which often prevents illness outright."
+   ],
+   "poor_answer": "Vaccines help your body fight off illnesses. They train your immune system so you don't get as sick. Doctors recommend them.",
+   "wrong_answer": "Vaccines work by putting a small amount of antibiotic into your bloodstream, which kills any virus you encounter for about a year before it wears off."
+  },
+  {
+   "id": "q04",
+   "question": "Why is the sky blue?",
+   "neutral_answer": "Sunlight contains all visible wavelengths. As it passes through the atmosphere, air molecules scatter shorter wavelengths much more strongly than longer ones, an effect known as Rayleigh scattering. Blue light is therefore scattered across the whole sky, which is why the sky looks blue from any direction.",
+   "elaboration": "The same physics explains red sunsets: near the horizon sunlight travels through far more atmosphere, so most of the blue has been scattered away before the light reaches you. The sky is not violet, even though violet scatters more than blue, because the Sun emits less violet and human eyes are less sensitive to it.",
+   "paraphrases": [
+    "Sunlight carries every visible wavelength. Travelling through the atmosphere, it meets air molecules that scatter short wavelengths far more strongly than long ones, an effect called Rayleigh scattering. Blue light ends up scattered across the entire sky, so the sky appears blue whichever way you look.",
+    "All visible wavelengths are present in sunlight. As that light crosses the atmosphere, air molecules scatter the shorter wavelengths much more than the longer ones, which is Rayleigh scattering. The result is blue light spread over the whole sky, making it look blue from every direction.",
+    "Sunlight includes the full range of visible wavelengths. Passing through the air, shorter wavelengths are scattered by air molecules far more efficiently than longer ones, a process known as Rayleigh scattering. Blue therefore fills the sky in all directions, which is why it looks blue.",
+    "The Sun emits light at all visible wavelengths. Air molecules in the atmosphere scatter the short wavelengths much more strongly than the long ones, an effect named Rayleigh scattering. Blue light is consequently spread throughout the sky, giving it a blue appearance from any viewing angle.",
+    "Every visible wavelength is contained in sunlight. When it travels through the atmosphere, molecules of air scatter shorter wavelengths considerably more than longer ones, which physicists call Rayleigh scattering. Blue light thus gets distributed across the sky, so it appears blue no matter where you look.",
+    "Sunlight is a mixture of all visible wavelengths. Atmospheric molecules scatter the shorter of those wavelengths much more intensely than the longer ones, an effect termed Rayleigh scattering. Because blue light is scattered right across the sky, the sky looks blue in every direction.",
+    "Light from the Sun spans all visible wavelengths. Crossing the atmosphere, it encounters air molecules that scatter short wavelengths far more than long ones, a phenomenon called Rayleigh scattering. That scattered blue light covers the whole sky, which is why the sky reads as blue.",
+    "Visible sunlight contains every wavelength. Air molecules scatter its shorter wavelengths much more strongly than its longer ones as it moves through the atmosphere, an effect known as Rayleigh scattering. The sky is filled with this scattered blue light and so looks blue from all directions."
+   ],
+   "poor_answer": "The sky is blue because of the way light works in the atmosphere. It has to do with the colours in sunlight and the air.",
+   "wrong_answer": "The sky is blue because it reflects the colour of the oceans, which cover most of Earth's surface. Over large deserts the sky appears noticeably more yellow."
+  },
+  {
+   "id": "q05",
+   "question": "What is inflation in economics?",
+   "neutral_answer": "Inflation is a sustained rise in the general price level, which means each unit of currency buys less than before. It is usually measured as the annual percentage change in a basket of consumer goods and services. Moderate, predictable inflation is normal; rapid or volatile inflation makes planning difficult.",
+   "elaboration": "Economists distinguish demand-pull inflation, where spending outpaces productive capacity, from cost-push inflation, where input costs such as energy rise. Central banks typically target around two percent and adjust interest rates to steer toward it, because deflation carries its own risks by encouraging households to postpone spending.",
+   "paraphrases": [
+    "Inflation is a sustained increase in the general level of prices, meaning each unit of currency purchases less than it did. It is normally measured as the yearly percentage change in a basket of consumer goods and services. Moderate and predictable inflation is ordinary; rapid or erratic inflation makes planning hard.",
+    "A sustained rise in the overall price level is inflation, and it means money buys less than before. The usual measure is the annual percentage change in the cost of a basket of consumer goods and services. Steady moderate inflation is normal, while fast or unstable inflation makes planning difficult.",
+    "Inflation refers to a continued rise in prices generally, so that each unit of currency has less purchasing power. It is typically quantified as the annual percentage change in a basket of consumer goods and services. Modest, predictable inflation is unremarkable; volatile or rapid inflation impedes planning.",
+    "When the general price level rises persistently, that is inflation, and each currency unit buys less than previously. Measurement is usually the year-on-year percentage change in a basket of consumer goods and services. Moderate and foreseeable inflation is normal, whereas quick or unsteady inflation complicates planning.",
+    "Inflation means prices in general keep rising, leaving each unit of currency able to buy less. The standard measure is the annual percentage change in a representative basket of consumer goods and services. Gentle, predictable inflation is routine, but rapid or volatile inflation makes it hard to plan.",
+    "A persistent climb in the general price level is what economists call inflation, and it erodes what a unit of currency will buy. It is commonly measured by the annual percentage change in a basket of consumer goods and services. Mild, steady inflation is normal; fast or erratic inflation hinders planning.",
+    "Inflation is an ongoing rise in prices across the economy, which reduces how much each unit of currency can buy. It is generally reported as the percentage change over a year in a basket of consumer goods and services. Moderate predictable inflation is usual; sharp or unpredictable inflation makes planning difficult.",
+    "The term inflation describes a sustained upward movement in the general price level, so that currency buys less over time. It is measured most often as the annual percentage change in a consumer basket of goods and services. Low stable inflation is normal, while rapid or volatile inflation obstructs planning."
+   ],
+   "poor_answer": "Inflation is when prices go up and money is worth less. It's something economists and governments pay attention to a lot.",
+   "wrong_answer": "Inflation is caused entirely by shopkeepers choosing to raise prices out of greed, and it can be stopped immediately by making price increases illegal."
+  },
+  {
+   "id": "q06",
+   "question": "How does a refrigerator keep food cold?",
+   "neutral_answer": "A refrigerator moves heat from inside to outside using a circulating refrigerant. The refrigerant evaporates in coils inside the cabinet, absorbing heat as it does so. A compressor then pressurises the vapour, and it condenses in coils on the outside, releasing that heat into the room.",
+   "elaboration": "This is why the back of a fridge feels warm and why a fridge cannot cool a sealed room: it is a heat pump, not a heat destroyer, and the compressor itself adds energy. The efficiency of the cycle depends heavily on the temperature difference the system has to maintain.",
+   "paraphrases": [
+    "A refrigerator transfers heat from its interior to the outside by circulating a refrigerant. Inside the cabinet the refrigerant evaporates in coils and takes up heat as it does. A compressor then raises the vapour's pressure, and it condenses in external coils, giving that heat off into the room.",
+    "Heat is moved from inside the refrigerator to outside it by a circulating refrigerant. The refrigerant evaporates in coils within the cabinet, absorbing heat in the process. A compressor pressurises the resulting vapour, which condenses in coils outside and releases the heat into the room.",
+    "Refrigerators work by carrying heat out of the cabinet using a circulating refrigerant. In interior coils the refrigerant evaporates and absorbs heat. The compressor then pressurises that vapour, and condensation in the exterior coils dumps the heat into the surrounding room.",
+    "The cooling comes from a refrigerant that circulates and carries heat from inside to outside. It evaporates in coils inside the cabinet, drawing in heat as it changes state. A compressor raises the vapour pressure, and the refrigerant condenses in outside coils, discharging heat into the room.",
+    "A fridge shifts heat out of its interior by means of a circulating refrigerant. That refrigerant evaporates in coils inside the cabinet and absorbs heat while doing so. The compressor pressurises the vapour, which then condenses in coils on the exterior and gives up its heat to the room.",
+    "Cold is produced by moving heat outward with a circulating refrigerant. Inside the cabinet the refrigerant boils into vapour in the coils, taking heat with it. A compressor then increases its pressure so it condenses in the outside coils, releasing that heat into the room.",
+    "The appliance removes heat from inside and rejects it outside using a refrigerant loop. Evaporation of the refrigerant in the internal coils absorbs heat from the cabinet. A compressor raises the pressure of the vapour, and condensation in the external coils expels the heat into the room.",
+    "A refrigerant circulating through the machine carries heat from the inside of the cabinet to the outside. It absorbs heat by evaporating in the interior coils. The compressor then pressurises the vapour, which condenses in coils on the outside and releases the heat into the room."
+   ],
+   "poor_answer": "A fridge has a motor and some pipes and it makes the inside cold so your food stays fresh longer. It runs on electricity.",
+   "wrong_answer": "A refrigerator works by generating cold air inside the cabinet and sealing it in, which is why the inside stays cold and no heat is produced anywhere."
+  },
+  {
+   "id": "q07",
+   "question": "What is the difference between weather and climate?",
+   "neutral_answer": "Weather is the state of the atmosphere over hours or days, such as today's temperature, wind and rainfall. Climate is the statistical distribution of weather at a place over decades. Weather is what you experience on a given day; climate is what you should expect on average and how variable it tends to be.",
+   "elaboration": "The distinction matters because a single cold week says nothing about long-term warming, while a shift in thirty-year averages does. Climate statistics include not only means but the frequency of extremes, which is often what changes first and matters most for infrastructure and agriculture.",
+   "paraphrases": [
+    "Weather describes the atmosphere's condition over hours or days, such as today's temperature, wind and rain. Climate is the statistical distribution of weather at a location across decades. Weather is what you get on a particular day; climate is what you should expect on average and how variable it usually is.",
+    "Weather refers to atmospheric conditions over a span of hours or days, like the temperature, wind and rainfall today. Climate is how weather is statistically distributed at a place over decades. Weather is your experience on a given day, while climate is the typical expectation and its usual variability.",
+    "The atmosphere's state over hours to days is weather, covering things like today's temperature, wind and precipitation. Climate is the statistical pattern of weather at a location over decades. Weather is what happens on a specific day; climate is the average you should anticipate and how much it fluctuates.",
+    "Weather means the condition of the atmosphere over hours or days, including today's temperature, wind and rainfall. Climate is the decades-long statistical distribution of weather in a place. What you experience on a given day is weather; what you should expect on average, and how variable it is, is climate.",
+    "Over hours and days, the state of the atmosphere is called weather, comprising temperature, wind and rainfall on the day. Climate is the statistical spread of weather at a site over decades. Weather is the single day's experience, climate the long-run expectation and its typical variability.",
+    "Weather is the short-term state of the atmosphere across hours or days, such as today's wind, temperature and rain. Climate is the statistical distribution of that weather at a place measured over decades. A day's experience is weather; the average to expect and its variability is climate.",
+    "Atmospheric conditions on a scale of hours or days constitute weather, for instance today's rainfall, wind and temperature. Climate is the statistical description of weather at a given place over decades. Weather is what a particular day brings, whereas climate is the expected average and its normal variation.",
+    "What the atmosphere is doing over hours or days is weather, including today's temperature, wind and rain. Climate is how weather is statistically distributed at a location over decades. Weather is the experience of one day; climate is the average to expect together with its usual variability."
+   ],
+   "poor_answer": "Weather and climate are related but they're not the same thing. One is short term and one is longer term.",
+   "wrong_answer": "Weather and climate are the same measurement, just reported by different agencies, so a single unusually cold week is direct evidence that the climate is cooling."
+  },
+  {
+   "id": "q08",
+   "question": "Why do we dream?",
+   "neutral_answer": "There is no settled answer. Leading hypotheses hold that dreaming supports memory consolidation, helps regulate emotion, or is a byproduct of the brain's activity during REM sleep. Evidence is mixed and the hypotheses are not mutually exclusive, so the honest summary is that the function of dreaming remains an open question.",
+   "elaboration": "Most vivid dreaming occurs during REM sleep, when the brain is highly active while voluntary muscles are paralysed. Studies show that sleep after learning improves retention, which supports the consolidation account, but it is hard to separate the contribution of dreaming itself from that of sleep generally.",
+   "paraphrases": [
+    "No settled answer exists. The main hypotheses are that dreaming aids memory consolidation, helps regulate emotion, or is simply a byproduct of brain activity during REM sleep. The evidence is mixed and these accounts are not mutually exclusive, so the honest summary is that the function of dreaming remains open.",
+    "There is no agreed explanation. Prominent hypotheses hold that dreaming assists memory consolidation, supports emotional regulation, or is a side effect of brain activity in REM sleep. Because the evidence is mixed and the accounts can coexist, the function of dreaming is best described as unresolved.",
+    "The question is unsettled. Leading proposals are that dreaming contributes to memory consolidation, aids emotional regulation, or arises incidentally from brain activity during REM sleep. Evidence does not cleanly favour one, and they are not mutually exclusive, so the function of dreaming remains an open question.",
+    "We do not have a settled answer. The main candidate explanations are memory consolidation, emotional regulation, and dreaming being a byproduct of REM sleep brain activity. Since the evidence is mixed and the explanations can all hold at once, the function of dreaming is still genuinely unknown.",
+    "This remains unresolved. The chief hypotheses are that dreaming serves memory consolidation, helps with emotional regulation, or is a byproduct of the brain's REM sleep activity. The evidence does not decide between them and they are compatible, so the honest answer is that the function is still open.",
+    "There is no consensus. Researchers have proposed that dreaming supports memory consolidation, assists emotional regulation, or is merely incidental to REM sleep brain activity. The evidence is mixed and none of these excludes the others, so the function of dreaming should be treated as an open question.",
+    "An agreed answer does not exist. Current hypotheses suggest dreaming helps consolidate memory, regulates emotion, or is a byproduct of neural activity in REM sleep. With mixed evidence and no incompatibility between the accounts, it is accurate to say the function of dreaming remains undetermined.",
+    "The matter is unsettled. Leading views are that dreaming helps consolidate memories, plays a part in emotional regulation, or is a byproduct of brain activity during REM sleep. Evidence is mixed and the views are not exclusive, so the function of dreaming is honestly still an open question."
+   ],
+   "poor_answer": "Scientists have different ideas about dreams. Some think they mean something and some don't. It's still being studied.",
+   "wrong_answer": "Dreams have been conclusively proven to be predictions of future events, which is why sleep researchers now use them for forecasting."
+  },
+  {
+   "id": "q09",
+   "question": "How does compound interest work?",
+   "neutral_answer": "Compound interest is interest calculated on the original principal plus all previously accumulated interest. Because each period's interest joins the base for the next period, the balance grows faster over time than under simple interest, where only the original principal earns a return.",
+   "elaboration": "The effect is highly sensitive to time and compounding frequency. At a fixed annual rate, a sum roughly doubles in the number of years given by 72 divided by the percentage rate, a useful approximation. The same mechanism works against you on debt, which is why credit card balances grow so quickly.",
+   "paraphrases": [
+    "Compound interest is interest computed on the original principal together with all the interest accumulated so far. Since each period's interest is added to the base for the following period, the balance grows more quickly over time than with simple interest, where only the initial principal earns a return.",
+    "With compound interest, interest is calculated on the starting principal plus every bit of interest already earned. Because each period's interest joins the base used next period, the balance rises faster over time than under simple interest, in which only the original principal generates a return.",
+    "Compound interest means interest is applied to the original principal as well as to all previously accrued interest. As each period's interest becomes part of the base for the next, the balance grows faster over time than with simple interest, where the return is earned on the initial principal alone.",
+    "Interest under compounding is worked out on the initial principal plus all interest accumulated to date. Each period's interest is folded into the base for the next period, so the balance increases more rapidly over time than with simple interest, which pays a return only on the original principal.",
+    "Under compound interest, the calculation covers the original principal and all the interest accumulated previously. Because every period's interest is added to the base for the next one, the balance builds faster over time than simple interest allows, since simple interest pays only on the starting principal.",
+    "Compound interest is the interest earned on the original sum plus all interest already accumulated. Each period's interest is included in the base for the next period, meaning the balance grows faster over time than with simple interest, where only the initial principal earns anything.",
+    "Interest that compounds is computed on both the original principal and the interest accrued so far. Since each period's interest becomes part of the base for the period after, the balance grows more quickly over time than under simple interest, which returns a yield on the original principal only.",
+    "The term compound interest describes interest calculated on the starting principal along with all interest built up previously. With each period's interest joining the base for the next, the balance rises faster over time than with simple interest, where only the original principal earns a return."
+   ],
+   "poor_answer": "Compound interest is when your money earns money and then that earns more money. It adds up over time if you leave it alone.",
+   "wrong_answer": "Compound interest means the bank pays you a fixed bonus each year that is the same regardless of your balance, so the amount you hold makes no difference."
+  },
+  {
+   "id": "q10",
+   "question": "What causes tides?",
+   "neutral_answer": "Tides are caused mainly by the Moon's gravitational pull, which is stronger on the side of Earth facing it and weaker on the far side. This difference stretches the oceans into two bulges, and Earth's rotation carries coastlines through them, producing roughly two high tides each day.",
+   "elaboration": "The Sun contributes about half as much tidal force as the Moon despite being far more massive, because tidal force falls off with the cube of distance. When Sun and Moon align, their effects add to give large spring tides; when they are at right angles, the smaller neap tides result.",
+   "paraphrases": [
+    "Tides arise chiefly from the Moon's gravitational pull, which acts more strongly on the near side of Earth and more weakly on the far side. That difference stretches the oceans into two bulges, and as Earth rotates, coastlines pass through them, giving roughly two high tides a day.",
+    "The main cause of tides is the Moon's gravity, stronger on the side of Earth facing it and weaker on the opposite side. This difference pulls the oceans into two bulges, and Earth's rotation carries coasts through those bulges, producing about two high tides each day.",
+    "Tides come mostly from the Moon's gravitational attraction, which is greater on the near side of Earth and lesser on the far side. The resulting difference stretches the oceans into a pair of bulges, and rotation carries coastlines through them, yielding roughly two high tides daily.",
+    "It is mainly the Moon's gravity that causes tides, pulling harder on the hemisphere facing it and more weakly on the one facing away. That imbalance draws the oceans into two bulges, and as the planet turns, shorelines move through them, giving approximately two high tides per day.",
+    "Tides are principally due to the Moon's gravitational pull, stronger on Earth's near side and weaker on its far side. The difference stretches the oceans into two bulges, and Earth's rotation brings coastlines through each of them, producing something close to two high tides every day.",
+    "The Moon's gravity is the primary driver of tides, exerting more force on the near side of Earth than the far side. This stretches the oceans into two bulges, and because Earth rotates, coastlines pass through both, resulting in roughly two high tides in a day.",
+    "Most of the tidal effect comes from the Moon's gravitational pull, which is strongest on the facing side of Earth and weakest on the opposite side. The difference deforms the oceans into two bulges, and rotation carries coasts through them, producing about two high tides each day.",
+    "Tides are largely produced by the Moon's gravity, greater on the side of Earth turned toward it and smaller on the far side. That gradient stretches the oceans into two bulges, and as Earth spins, coastlines sweep through them, which gives roughly two high tides per day."
+   ],
+   "poor_answer": "Tides are caused by the Moon and they go in and out twice a day. It's to do with gravity pulling on the sea.",
+   "wrong_answer": "Tides are caused by the Earth's rotation flinging water outward, which is why tides are highest at the equator and absent near the poles."
+  },
+  {
+   "id": "q11",
+   "question": "Why do onions make you cry?",
+   "neutral_answer": "Cutting an onion ruptures its cells and releases enzymes that convert sulphur compounds into a volatile gas. That gas reaches the eye, reacts with the moisture there to form a mild irritant, and triggers the tear glands to flush it away.",
+   "elaboration": "Chilling the onion slows the reaction and a sharp knife ruptures fewer cells, so both reduce the effect. The compounds involved evolved as a chemical defence against animals eating the bulb, which is also why they contribute so much to the flavour of cooked onion.",
+   "poor_answer": "Onions have something in them that irritates your eyes when you cut them, which is why you end up crying.",
+   "wrong_answer": "Onions make you cry because they release a fine acidic powder that physically scratches the surface of the eye when you cut into them."
+  },
+  {
+   "id": "q12",
+   "question": "What is machine learning?",
+   "neutral_answer": "Machine learning is a set of methods for building systems that improve at a task by finding patterns in data rather than by being explicitly programmed with rules. A model is fitted to training examples, and its usefulness is judged by how well it performs on data it has not seen.",
+   "elaboration": "The main families are supervised learning from labelled examples, unsupervised learning that finds structure in unlabelled data, and reinforcement learning from rewards. The central practical difficulty is generalisation: a model that fits its training data perfectly may have memorised noise and perform poorly on new cases.",
+   "poor_answer": "Machine learning is a kind of AI where computers learn from data. It's used in lots of applications these days.",
+   "wrong_answer": "Machine learning means the computer writes its own source code from scratch each time it sees new data, which is why the programs can never be inspected."
+  },
+  {
+   "id": "q13",
+   "question": "How do noise-cancelling headphones work?",
+   "neutral_answer": "Microphones on the headphones pick up incoming sound, and circuitry generates a signal that is the inverse of that waveform. When the two combine at your ear, the pressure variations largely cancel. The technique works best on steady low-frequency noise such as engine hum.",
+   "elaboration": "Sudden or high-frequency sounds are much harder to cancel because the system needs to react within a fraction of a wavelength, so voices remain partly audible. Headphones also block sound passively through their physical seal, and in practice both mechanisms contribute to the result.",
+   "poor_answer": "They use technology to block out the noise around you so you can hear your music better. They're useful on planes.",
+   "wrong_answer": "Noise-cancelling headphones work by emitting a high-frequency tone that deafens the ear to outside sound for as long as they are switched on."
+  },
+  {
+   "id": "q14",
+   "question": "Why does metal feel colder than wood at the same temperature?",
+   "neutral_answer": "Metal conducts heat far more readily than wood. When you touch metal, it draws heat away from your skin quickly, and your nerves register the rate of heat loss rather than the object's temperature. Wood removes heat slowly, so it feels warmer even at an identical temperature.",
+   "elaboration": "This is why a metal bench in the sun can feel dangerously hot while a wooden one nearby is comfortable, and it explains why thermal conductivity, not temperature, governs the perception. A thermometer placed on both surfaces in the same room will read essentially the same value.",
+   "poor_answer": "Metal feels colder than wood because of the material it's made of. Different things feel different to touch.",
+   "wrong_answer": "Metal feels colder than wood because metal objects are genuinely at a lower temperature than nearby wooden ones, even in the same room."
+  },
+  {
+   "id": "q15",
+   "question": "What is the greenhouse effect?",
+   "neutral_answer": "Certain atmospheric gases are transparent to incoming sunlight but absorb the longer-wavelength infrared radiation that Earth emits back toward space. They re-radiate part of that energy downward, which keeps the surface warmer than it would otherwise be. Without this effect Earth's average temperature would be far below freezing.",
+   "elaboration": "The concern is not the effect itself but its intensification: raising the concentration of carbon dioxide and methane increases how much outgoing infrared is absorbed. Water vapour is the largest contributor by quantity, but its concentration responds to temperature rather than driving it, which makes it an amplifier.",
+   "poor_answer": "The greenhouse effect is about gases in the atmosphere trapping heat and making the planet warmer than it would be.",
+   "wrong_answer": "The greenhouse effect works because carbon dioxide forms a physical reflective barrier in the upper atmosphere that bounces sunlight back down to the surface."
+  },
+  {
+   "id": "q16",
+   "question": "How do airplanes stay in the air?",
+   "neutral_answer": "A wing is shaped and angled so that it deflects air downward as it moves forward. By Newton's third law, the air pushes the wing upward with an equal and opposite force. This lift grows with airspeed and with the wing's angle of attack, and it balances the aircraft's weight in level flight.",
+   "elaboration": "The popular explanation based only on air travelling faster over a longer upper surface is incomplete, since aircraft can fly inverted. Beyond a critical angle of attack the airflow separates from the wing and lift collapses, which is the stall that pilots train extensively to recognise and recover from.",
+   "poor_answer": "Planes stay up because of their wings and their engines and the speed they go at. Aerodynamics is involved.",
+   "wrong_answer": "Aeroplanes stay airborne because their engines continuously push them upward, which is why an engine failure causes an aircraft to drop straight down."
+  },
+  {
+   "id": "q17",
+   "question": "What is the difference between a virus and a bacterium?",
+   "neutral_answer": "Bacteria are single-celled organisms that carry out their own metabolism and reproduce independently. Viruses are much smaller, are not cells, and cannot reproduce without hijacking a host cell's machinery. Antibiotics act on bacterial processes and therefore have no effect on viruses.",
+   "elaboration": "This distinction has direct clinical consequences: prescribing antibiotics for a viral infection provides no benefit and contributes to resistance. Most bacteria are harmless or beneficial, particularly those in the gut, whereas viruses are obligate parasites by definition.",
+   "poor_answer": "Viruses and bacteria are both germs that make you ill, but they're different kinds of thing and are treated differently.",
+   "wrong_answer": "Viruses and bacteria are both single-celled organisms, and antibiotics are effective against both of them if the dose is high enough."
+  },
+  {
+   "id": "q18",
+   "question": "Why do we need sleep?",
+   "neutral_answer": "Sleep supports memory consolidation, metabolic regulation, immune function and the clearance of metabolic waste from the brain. Prolonged deprivation measurably impairs attention, mood and decision-making. The full picture is still incomplete, but the evidence that sleep is biologically necessary rather than optional is very strong.",
+   "elaboration": "Sleep cycles alternate between non-REM stages, which dominate early in the night and appear important for physical restoration, and REM, which lengthens toward morning. Both appear to matter, and selectively depriving people of one stage produces a rebound in that stage on subsequent nights.",
+   "poor_answer": "Sleep is important for your health and you feel bad without it. Your body and brain need the rest.",
+   "wrong_answer": "Sleep is simply a habit formed in childhood, and adults who train themselves out of it suffer no measurable cognitive effects."
+  },
+  {
+   "id": "q19",
+   "question": "How does GPS know where you are?",
+   "neutral_answer": "A GPS receiver listens for timing signals from several satellites whose orbits are precisely known. By measuring how long each signal took to arrive, it calculates its distance from each satellite and solves for the one position consistent with all of them. Four satellites resolve position and clock error together.",
+   "elaboration": "The satellites carry atomic clocks, and the system must correct for relativistic effects: clocks run faster in weaker gravity and slower when moving quickly, and ignoring either would introduce errors of kilometres per day. Accuracy degrades in cities where buildings block or reflect signals.",
+   "poor_answer": "GPS uses satellites in space to work out where your phone is. It's accurate to a few metres usually.",
+   "wrong_answer": "GPS works because your phone transmits a signal up to the satellites, which then calculate your location and send it back down to you."
+  },
+  {
+   "id": "q20",
+   "question": "What is a black hole?",
+   "neutral_answer": "A black hole is a region where matter has collapsed to such density that the escape velocity exceeds the speed of light, so nothing can escape from within its event horizon. The horizon is a boundary in spacetime, not a physical surface, and its size scales with the object's mass.",
+   "elaboration": "They form when massive stars collapse at the end of their lives, and supermassive versions sit at the centres of most large galaxies. Although light cannot escape, infalling matter heats up in an accretion disc and radiates brightly, which is how many black holes are detected.",
+   "poor_answer": "A black hole is a thing in space where gravity is really strong and nothing can get out, not even light.",
+   "wrong_answer": "A black hole is a hole in the fabric of space that actively sucks in everything around it, so any object in the galaxy will eventually be pulled in."
+  },
+  {
+   "id": "q21",
+   "question": "Why does salt melt ice?",
+   "neutral_answer": "Salt dissolves into the thin layer of liquid water present on ice and lowers its freezing point. Below the normal freezing temperature the ice can then no longer remain solid, so it melts. The effect weakens as the temperature drops and stops being useful well below about minus ten degrees Celsius.",
+   "elaboration": "The phenomenon is called freezing point depression and depends on the number of dissolved particles rather than their identity, which is why calcium chloride works at lower temperatures than sodium chloride: each unit releases more ions. Melting also requires heat, drawn from the surroundings.",
+   "poor_answer": "Salt lowers the temperature at which ice melts so putting it on ice makes the ice go away. That's why they use it on roads.",
+   "wrong_answer": "Salt melts ice by chemically reacting with the water and generating heat, which is why heavily salted roads feel warm to the touch."
+  },
+  {
+   "id": "q22",
+   "question": "How do solar panels generate electricity?",
+   "neutral_answer": "A solar panel is made of semiconductor material, usually silicon, arranged so that an internal electric field exists at a junction. When a photon is absorbed it frees an electron, and the field drives that electron in a particular direction. Connecting the two sides through a circuit produces a usable current.",
+   "elaboration": "Only photons above a threshold energy free an electron, and any excess energy becomes heat, which is why single-junction silicon cells have a theoretical efficiency limit near 33 percent. Panels also lose output as they heat up, so cool bright days produce more than hot ones.",
+   "poor_answer": "Solar panels take sunlight and turn it into electricity using special materials. They work better on sunny days.",
+   "wrong_answer": "Solar panels generate electricity from the heat of the sun rather than the light, which is why they produce the most power on the hottest days of summer."
+  },
+  {
+   "id": "q23",
+   "question": "What is the placebo effect?",
+   "neutral_answer": "The placebo effect is a measurable improvement in symptoms following an inert treatment, arising from expectation, conditioning and the context of care. It is strongest for subjective outcomes such as pain and nausea, and much weaker or absent for objective measures like tumour size.",
+   "elaboration": "It is the reason clinical trials use placebo controls: without one, the effect of the drug cannot be separated from the effect of being treated. The mirror phenomenon, where negative expectation worsens symptoms, is called the nocebo effect and complicates the reporting of side effects.",
+   "poor_answer": "The placebo effect is when people feel better from a treatment that isn't actually doing anything medically.",
+   "wrong_answer": "The placebo effect has been shown to shrink tumours and mend broken bones as effectively as surgery, provided the patient believes strongly enough."
+  },
+  {
+   "id": "q24",
+   "question": "Why do leaves change colour in autumn?",
+   "neutral_answer": "Leaves are green because chlorophyll dominates. As days shorten and temperatures fall, deciduous trees stop producing chlorophyll and reabsorb its nutrients. The yellow and orange carotenoid pigments that were present all along become visible once the green fades.",
+   "elaboration": "Reds are different: anthocyanins are produced fresh in autumn, favoured by bright cool days, which is why the intensity of red varies markedly between years. The tree then forms an abscission layer at the base of the stem, which eventually releases the leaf.",
+   "poor_answer": "Leaves change colour in autumn because of the season changing and the tree getting ready for winter.",
+   "wrong_answer": "Leaves change colour in autumn because the cold physically freezes the green pigment, turning it orange in the same way that metal rusts."
+  },
+  {
+   "id": "q25",
+   "question": "What does a central bank do?",
+   "neutral_answer": "A central bank manages a currency and the monetary conditions around it. Its main tools are setting short-term interest rates and operating in financial markets. Most also supervise parts of the banking system and act as lender of last resort during liquidity crises.",
+   "elaboration": "Mandates vary: some target price stability alone, while others balance it against employment. Operational independence from day-to-day politics is common, on the argument that governments face short-term incentives to tolerate inflation, though that independence is exercised within goals set by legislation.",
+   "poor_answer": "A central bank looks after the money supply and interest rates in a country. It's part of how the economy is managed.",
+   "wrong_answer": "A central bank's main job is to print enough money each year to pay the government's bills, which is why national debt has no real consequences."
+  },
+  {
+   "id": "q26",
+   "question": "How does anaesthesia work?",
+   "neutral_answer": "General anaesthetics act on the central nervous system to produce unconsciousness, immobility and loss of pain sensation, largely by enhancing inhibitory signalling and suppressing excitatory signalling between neurons. Local anaesthetics work differently, by blocking sodium channels so that nerves cannot transmit signals from a specific area.",
+   "elaboration": "Despite two centuries of routine use, exactly how general anaesthetics produce unconsciousness is not fully understood, and modern practice uses combinations of drugs with continuous monitoring. Dosing is complicated because the margin between adequate anaesthesia and dangerous depression of breathing can be narrow.",
+   "poor_answer": "Anaesthesia stops you feeling pain during surgery. The anaesthetist gives you drugs and you go to sleep.",
+   "wrong_answer": "General anaesthesia works by temporarily stopping the heart, which is why patients feel no pain and why the procedure must be kept short."
+  },
+  {
+   "id": "q27",
+   "question": "What is the difference between mass and weight?",
+   "neutral_answer": "Mass is the amount of matter in an object and does not change with location. Weight is the force gravity exerts on that mass, so it varies with the local gravitational field. An object with a mass of ten kilograms has the same mass on the Moon but weighs about a sixth as much.",
+   "elaboration": "In everyday speech the two are used interchangeably because gravity is nearly uniform across Earth's surface. Scales actually measure force and then display an inferred mass, which is why a scale would read incorrectly in an accelerating lift even though your mass is unchanged.",
+   "poor_answer": "Mass and weight are different things even though people use the words to mean the same thing most of the time.",
+   "wrong_answer": "Mass and weight are identical quantities measured in different units, so an object's mass changes when you take it to the Moon."
+  },
+  {
+   "id": "q28",
+   "question": "Why is biodiversity important?",
+   "neutral_answer": "Biodiversity underpins ecosystem functions that people depend on, including pollination, water filtration, soil formation and climate regulation. Diverse systems also tend to be more resilient, because different species respond differently to disturbance, so function is less likely to collapse when conditions change.",
+   "elaboration": "There is also an insurance argument: species whose value is not currently recognised may prove important later, and extinction is irreversible. Measuring biodiversity is harder than it sounds, since species counts, genetic diversity within species, and the variety of habitats can each point in different directions.",
+   "poor_answer": "Biodiversity means having lots of different species around, and that's good for nature and for people too.",
+   "wrong_answer": "Biodiversity matters only for aesthetic reasons, since ecosystems function identically no matter how many species they contain."
+  },
+  {
+   "id": "q29",
+   "question": "How do batteries store energy?",
+   "neutral_answer": "A battery stores energy chemically. Two electrodes made of different materials are separated by an electrolyte, and a chemical reaction at each electrode drives electrons through an external circuit from one to the other. In a rechargeable battery, applying a voltage reverses those reactions.",
+   "elaboration": "Capacity is limited by how much reactive material is present, and lifetime by side reactions that gradually consume it or change electrode structure. Lithium-ion cells store energy by moving lithium ions between electrodes rather than consuming them, which is part of why they tolerate many cycles.",
+   "poor_answer": "Batteries store electricity inside them using chemicals and then release it when you connect them to something.",
+   "wrong_answer": "Batteries store actual electrons inside them like water in a tank, and a flat battery is one that has physically run out of electrons."
+  },
+  {
+   "id": "q30",
+   "question": "What is opportunity cost?",
+   "neutral_answer": "Opportunity cost is the value of the best alternative you give up when making a choice. It matters because the real cost of a decision is not only the money spent but what that time, money or capacity could otherwise have produced.",
+   "elaboration": "It explains why an apparently free option may not be cheap: a year spent on one project is a year not spent on another. Sunk costs are the mirror image, since money already spent and unrecoverable should not influence which option is best going forward.",
+   "poor_answer": "Opportunity cost is about what you give up when you choose one thing over another. Economists talk about it a lot.",
+   "wrong_answer": "Opportunity cost is the total amount of money you have already spent on a project, which is why abandoning it halfway is always the wrong decision."
+  }
+ ]
+}
