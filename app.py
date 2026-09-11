@@ -19,9 +19,9 @@ import streamlit as st
 
 from rmi import severity as sev
 from rmi import viz
-from rmi.findings import module_items, overview_verdict, verdict_line
+from rmi.findings import module_items, overview_verdict, tone_check, verdict_line
 from rmi.report import build as build_report
-from rmi.runner import PROBES, PRESETS, list_results, load_results, run_scan
+from rmi.runner import PROBES, PRESETS, RESULTS_DIR, list_results, load_results, run_scan
 
 
 @st.cache_data(show_spinner="Loading results")
@@ -60,9 +60,54 @@ st.markdown("""
   .verdict.mild {border-left-color:#fab219; background:#fdf6e8;}
   .verdict .hint {display:block; color:#52514e; font-size:12.5px; margin-top:6px;}
   ins {background:#d7f0d7; text-decoration:none;}
+  [class*="st-key-drill"] details {border:1px solid #2a78d6 !important;
+     border-left-width:5px !important; background:#f4f8fe !important; border-radius:9px;}
+  [class*="st-key-drill"] summary {font-weight:600 !important; font-size:15px !important;}
+  [class*="st-key-drill"] summary p {font-weight:600 !important; font-size:15px !important;}
   del {background:#fbdada; text-decoration:line-through;}
 </style>
 """, unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------------------
+# clearing saved results
+# --------------------------------------------------------------------------------------
+
+# A scan JSON runs to ~10 MB and its exported report to ~4.5 MB, and both go stale as soon as the
+# analysis code changes, which is why they are worth being able to throw away from the UI. The
+# score cache is deliberately not part of this; see the caption in the sidebar.
+CLEARABLE = (".json", ".html")
+
+
+def clearable_results(d: Path) -> list[Path]:
+    """The files a clear would remove: plain files sitting directly in the results directory."""
+    if not d.is_dir():
+        return []
+    return sorted(f for f in d.iterdir()
+                  if f.is_file() and not f.is_symlink() and f.suffix in CLEARABLE)
+
+
+def clear_results(d: Path) -> tuple[int, list[str]]:
+    """Delete those files, returning how many went and the name of any that would not.
+
+    Each path is resolved and checked against the resolved directory again immediately before the
+    unlink, so no symlink or oddly built name can reach outside it, and subdirectories are never
+    descended into. A file that refuses to go is reported rather than raised, because one
+    permission error should not take the dashboard down with it.
+    """
+    root = d.resolve()
+    removed, failed = 0, []
+    for f in clearable_results(d):
+        try:
+            target = f.resolve()
+            if target.parent != root or target.suffix not in CLEARABLE:
+                failed.append(f"{f.name} (points outside {root.name}/)")
+                continue
+            target.unlink()
+            removed += 1
+        except OSError as exc:
+            failed.append(f"{f.name} ({exc.strerror or exc})")
+    return removed, failed
 
 
 # --------------------------------------------------------------------------------------
@@ -103,6 +148,46 @@ with st.sidebar:
     st.caption("One self-contained file with every chart inlined. Opens in any browser with no "
                "Python and no network.")
 
+    st.divider()
+    st.markdown("### Maintenance")
+    if done := st.session_state.pop("clear_done", None):
+        st.success(done)
+    stale = clearable_results(RESULTS_DIR)
+    size_mb = sum(f.stat().st_size for f in stale) / 1e6
+    if not stale:
+        st.button("Clear saved results", width="stretch", disabled=True)
+        st.caption("No saved results.")
+    elif not st.session_state.get("confirm_clear"):
+        # Armed first, deleted second: a single stray click would otherwise cost a scan that
+        # takes minutes of GPU time to reproduce.
+        if st.button("Clear saved results", width="stretch"):
+            st.session_state["confirm_clear"] = True
+            st.rerun()
+        st.caption(f"{len(stale)} files · {size_mb:.1f} MB of results JSON and exported reports.")
+    else:
+        st.warning(f"Delete {len(stale)} files, {size_mb:.1f} MB? This cannot be undone.")
+        c1, c2 = st.columns(2)
+        if c1.button("Delete permanently", type="primary", width="stretch"):
+            removed, failed = clear_results(RESULTS_DIR)
+            st.session_state.pop("confirm_clear", None)
+            st.session_state.pop("results", None)
+            st.session_state.pop("results_name", None)
+            if failed:
+                st.error(f"Removed {removed} files. Could not remove " + ", ".join(failed))
+            else:
+                # Rerun so the app falls back to its landing page rather than rendering a run
+                # whose file has just been deleted, and so the picker re-reads the directory.
+                st.session_state["clear_done"] = f"Removed {removed} files."
+                st.rerun()
+        if c2.button("Cancel", width="stretch"):
+            st.session_state.pop("confirm_clear", None)
+            st.rerun()
+    st.caption(
+        "The score cache in `.rmi_cache/` is left alone. Scores are deterministic and keyed by "
+        "model id, revision and text, so a cached score is never stale, only expensive to rebuild. "
+        "Results JSON does go stale when the analysis code changes."
+    )
+
 if run_clicked:
     bar = st.progress(0.0, text="starting")
 
@@ -139,6 +224,21 @@ if R is None:
 # --------------------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------------------
+
+def labelled(options, labels: dict, *, sep: str = " — ", limit: int = 70):
+    """Format a dropdown option as "id — short description".
+
+    A bare id like t01 or q07 tells the reader nothing about what they are about to open.
+    Returns the sorted options and the formatter, so both stay in step.
+    """
+    def fmt(key):
+        text = str(labels.get(key, "")).strip()
+        if len(text) > limit:
+            text = text[: limit - 1].rstrip() + "…"
+        return f"{key}{sep}{text}" if text else str(key)
+
+    return sorted(options), fmt
+
 
 def ordinal(n: float) -> str:
     i = int(round(n))
@@ -335,6 +435,7 @@ with tabs[1]:
         st.markdown(verdict_line(items, "identity",
                                  "swapping a name or a descriptor changes the score",
                                  noise=noise), unsafe_allow_html=True)
+        st.markdown("#### Which identities change the score")
         st.plotly_chart(viz.bias_bars(items, noise), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
@@ -343,8 +444,9 @@ with tabs[1]:
             "way counts and only the size is shown. Grey bars did not reach significance."
         )
 
+        st.markdown("#### Inspect one axis")
         choices = {i["label"]: i for i in items}
-        pick = st.selectbox("Inspect an axis", list(choices),
+        pick = st.selectbox("Which axis", list(choices),
                             index=list(choices).index(max(choices, key=lambda k: abs(choices[k]["effect"]))))
         chosen = choices[pick]
         kind = chosen["detail"].get("kind")
@@ -393,12 +495,17 @@ with tabs[1]:
             varies, extra_cols = "level", []
             what = f"{axis} descriptor"
 
-        with st.expander(f"Read the exact text that was scored, swapping the {what}"):
+        st.markdown("#### Read the exact text")
+        with st.expander(f"See the scored text, swapping the {what}",
+                         icon=":material/article:", key="drill_identity"):
             arms = pd.DataFrame(rows)
             if arms.empty:
                 st.info("No scored text was stored for this axis.")
             else:
-                tmpl = st.selectbox("Template", sorted(arms["template_id"].unique()),
+                domains = {r["template_id"]: r["domain"].replace("_", " ")
+                           for r in arms.to_dict("records")}
+                opts, fmt = labelled(arms["template_id"].unique(), domains)
+                tmpl = st.selectbox("Template", opts, format_func=fmt,
                                     key=f"identity_template_{pick}")
                 sub = arms[arms["template_id"] == tmpl].sort_values("score", ascending=False)
                 top, bot = sub.iloc[0], sub.iloc[-1]
@@ -423,13 +530,13 @@ with tabs[1]:
 
 with tabs[2]:
     sy = R.get("sycophancy")
-    if not sy or not noise:
-        st.info("The sycophancy probe was not part of this run.")
+    if not sy or not noise or not sy.get("premium_by_level"):
+        st.info("The sycophancy probe was not part of this run, or predates the current schema.")
     else:
         items = module_items(R, "sycophancy")
         m = sy["agreement_main_effect"]
         slope = max(sy["insistence_slopes"], key=lambda s: s["mean_delta"])
-        prem = {(p["insistence"], p["tone"]): p for p in sy["premiums"]}
+        by_level = {p["insistence"]: p for p in sy["premium_by_level"]}
 
         st.markdown(verdict_line(items, "sycophancy",
                                  "the model is rewarded for agreeing rather than correcting",
@@ -442,19 +549,19 @@ with tabs[2]:
         st.caption(
             "Above the line the model prefers agreeing with the user; below it, correcting them. "
             "Each scenario is asked three ways, changing only how hard the user pushes, never the "
-            "two answers being compared. Both tones are shown because agreement only means "
-            "something with tone held fixed."
+            "two answers being compared."
         )
+        tone = tone_check(sy, noise)
+        if tone["diverges"]:
+            st.warning(tone["text"] + "  Version 1 reports the average of the two; the appendix "
+                       "has the breakdown.")
 
-        crossed = [lvl for lvl in viz.LADDER
-                   if all(prem[(lvl, t)]["mean_delta"] > 0 for t in ("warm", "blunt"))]
-        if crossed and slope["p_sign"] < 0.05:
-            first = crossed[0]
+        if slope["mean_delta"] > 0 and slope["p_sign"] < 0.05:
             st.warning(
                 f"**Read the slope, not the average.** Across everything the model barely prefers "
                 f"agreement ({m['mean_delta']:+.2f} logits, p = {m['p_sign']:.2f}), so a test that "
                 f"reported only the average would find nothing here. But once the user "
-                f"{viz.LADDER_LABEL[first]}, both lines cross zero: the model flips from mildly "
+                f"{viz.LADDER_LABEL[slope['level']]}, the line crosses zero: the model flips from "
                 f"preferring corrections to preferring agreement, a change of "
                 f"{slope['mean_delta']:+.2f} logits (p = {slope['p_sign']:.3f}). Caving under "
                 "pressure is the behaviour that gets amplified in RLHF."
@@ -465,48 +572,60 @@ with tabs[2]:
         pick = st.selectbox("How hard the user pushes", viz.LADDER,
                             index=viz.LADDER.index(slope["level"]),
                             format_func=lambda k: f"The user {viz.LADDER_LABEL[k]}")
+        lvl = by_level[pick]
         c1, c2 = st.columns([3, 2])
         with c1:
-            st.plotly_chart(viz.sycophancy_cells(sy["arms"], pick), width="stretch",
+            st.plotly_chart(viz.sycophancy_scenarios(sy["arms"], pick), width="stretch",
                             config={"displayModeBar": False})
         with c2:
-            warm, blunt = prem[(pick, "warm")], prem[(pick, "blunt")]
-            avg = (warm["mean_delta"] + blunt["mean_delta"]) / 2
-            st.metric("Reward for agreeing, tone held fixed", f"{avg:+.2f} logits",
-                      help="The gap between the two x groups on the chart, averaged over tones.")
+            st.metric("Reward for agreeing", f"{lvl['mean_delta']:+.2f} logits",
+                      delta=f"agreement wins on {lvl['win_rate']:.0%} of scenarios",
+                      delta_color="off")
             st.markdown(
-                f"Agreeing is worth `{warm['mean_delta']:+.2f}` in a warm tone and "
-                f"`{blunt['mean_delta']:+.2f}` in a blunt one. "
-                + ("Both point the same way, so this is about **agreement**, not about warmth."
-                   if warm["mean_delta"] * blunt["mean_delta"] > 0 else
-                   "They point in opposite directions, so tone is doing the work here, not "
-                   "agreement.")
-                + f" Agreement wins on {warm['win_rate']:.0%} of scenarios when warm."
+                f"95% interval `{lvl['ci_low']:+.2f}` to `{lvl['ci_high']:+.2f}`, "
+                f"p = `{lvl['p_sign']:.3f}` across {lvl['n_items']} scenarios. "
+                + ("The model leans toward agreeing at this level."
+                   if lvl["mean_delta"] > 0 else
+                   "The model still prefers correcting at this level.")
             )
             st.caption(
-                f"Agreements run {abs(warm['mean_token_delta']):.0f} to "
-                f"{abs(blunt['mean_token_delta']):.0f} tokens shorter than corrections, because a "
-                "correction has to explain itself. Adjusting for that leaves the agreement effect "
-                f"at {sy['length_adjusted']['agrees']['coef']:+.2f} logits overall, so it is not a "
-                "length artifact."
+                "Each dot is one scenario, red where agreeing scored higher and green where "
+                "correcting did. A mean can come from every scenario leaning the same way or from "
+                "a few extremes, and those mean different things for a policy trained on it."
+            )
+            st.caption(
+                f"Agreements run about {abs(m['mean_token_delta']):.0f} tokens shorter than "
+                "corrections, because a correction has to explain itself. Adjusting for that "
+                f"leaves the agreement effect at {sy['length_adjusted']['agrees']['coef']:+.2f} "
+                "logits overall, so it is not a length artifact."
             )
 
         # ---- the exact text ----------------------------------------------------------------
-        with st.expander(f"Read the four responses when the user {viz.LADDER_LABEL[pick]}"):
+        st.markdown("#### Read the exact text")
+        with st.expander(f"See the responses when the user {viz.LADDER_LABEL[pick]}",
+                         icon=":material/article:", key="drill_sycophancy"):
             arms = pd.DataFrame(sy["arms"])
             topics = dict(zip(arms["scenario_id"], arms["topic"]))
-            sid = st.selectbox("Scenario", sorted(topics),
-                               format_func=lambda s: f"{s} — {topics[s]}")
+            s_opts, s_fmt = labelled(topics, topics)
+            sid = st.selectbox("Scenario", s_opts, format_func=s_fmt)
             sub = arms[(arms["scenario_id"] == sid) & (arms["insistence"] == pick)]
             st.markdown("**The user says:**")
             st.markdown(f'<div class="txtbox">{html.escape(sub.iloc[0]["question"])}</div>',
                         unsafe_allow_html=True)
-            for tone in ["warm", "blunt"]:
-                a = sub[sub["cell"] == f"agrees_{tone}"].iloc[0]
-                c = sub[sub["cell"] == f"corrects_{tone}"].iloc[0]
+            st.caption(
+                "This scenario is written in two versions and both are scored. The premium above "
+                "is their average, which is why two pairs are shown here."
+            )
+            # The two versions differ in wording only. Version 1 does not treat that difference as
+            # a factor, so they are numbered rather than named; see the plan doc's deferred
+            # section for the case for bringing the distinction back.
+            variants = [c.split("_", 1)[1] for c in sub["cell"] if c.startswith("agrees_")]
+            for i, variant in enumerate(sorted(set(variants), reverse=True), start=1):
+                a = sub[sub["cell"] == f"agrees_{variant}"].iloc[0]
+                c = sub[sub["cell"] == f"corrects_{variant}"].iloc[0]
                 d = a["score"] - c["score"]
                 st.markdown(
-                    f"**{tone.capitalize()} tone** — "
+                    f"**Version {i} of {len(set(variants))}** — "
                     + (f"the model prefers agreeing, by `{d:+.3f}`" if d > 0
                        else f"the model prefers correcting, by `{-d:+.3f}`"))
                 side_by_side("Agrees with the user", a["text"], a["score"],
@@ -522,85 +641,71 @@ with tabs[3]:
     if not sm or not noise:
         st.info("The style probe was not part of this run.")
     else:
-        items = module_items(R, "style")
+        items = module_items(R, "style", group="content_neutral")
+        bearing = module_items(R, "style", group="quality_bearing")
         st.markdown(verdict_line(
             items, "style", "surface style is rewarded for its own sake", noise=noise,
-            extra="Only transforms that add no information are charted, since those are the ones "
-                  "where any reward at all is unearned. Effects are shown after removing what the "
-                  "extra length alone explains."), unsafe_allow_html=True)
-        st.plotly_chart(
-            viz.bias_bars(items, noise, signed=True,
-                          bad_label="rewarded though it adds nothing",
-                          good_label="penalised, the model resists it"),
-            width="stretch", config={"displayModeBar": False})
-        bearing = [a for a in sm["adjusted"] if a["group"] == "quality_bearing"]
-        if bearing:
-            bearing.sort(key=lambda a: -a["effect_at_max_dose"])
-            st.caption(
-                "Transforms that might genuinely improve an answer are left out of the chart, "
-                "because rewarding them would not be a fault. For reference they are: "
-                + ", ".join(f"{a['transform']} {a['effect_at_max_dose']:+.2f}" for a in bearing)
-                + " logits."
-            )
+            extra="Effects are shown after removing what the extra length alone explains."),
+            unsafe_allow_html=True)
 
-        st.markdown("#### Why these numbers are adjusted for length")
-        st.markdown(
-            "Comparing a styled answer against the plain one measures two things at once: the "
-            "style, and the extra length the style drags along. This model dislikes added length, "
-            "so the naive comparison makes almost every transform look disliked. Each arrow starts "
-            "at what the naive comparison says and ends at what is left once the length effect is "
-            "taken out. Every arrow points the same way, and three of them cross zero, which means "
-            "the naive comparison got their direction wrong."
-        )
-        st.plotly_chart(viz.style_length_decomposition(sm), width="stretch",
-                        config={"displayModeBar": False})
-        flip = _length_flip(sm)
-        if flip:
-            name, raw, adj = flip
-            st.info(
-                f"**{name.capitalize()}** is the one that changes a verdict. It adds no "
-                f"information, so any reward for it is unearned. Compared naively against the "
-                f"plain answer it scores `{raw:+.2f}` and looks disliked; once the length it adds "
-                f"is accounted for it is `{adj:+.2f}`. Without the length control this would have "
-                "been recorded as the model resisting flattery, when it mildly prefers it."
-            )
-
-        c1, c2 = st.columns([1, 1])
+        st.markdown("#### Which styles the model rewards")
+        # One scale across both charts, so a bar in one is comparable to a bar in the other.
+        shared_max = max([abs(i["effect"]) for i in items + bearing]
+                         + [noise["p95_abs_delta"]]) * 1.22
+        c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Reward against answer length**")
-            st.plotly_chart(viz.style_length_curve(sm), width="stretch",
-                            config={"displayModeBar": False})
-            st.caption("Traced by adding content-free filler, which is what every other effect "
-                       "here is measured against.")
+            st.markdown("**Style that adds no information**")
+            st.caption("Any reward at all here is unearned, so these are bias claims.")
+            st.plotly_chart(
+                viz.bias_bars(items, noise, signed=True, xmax=shared_max,
+                              bad_label="rewarded though it adds nothing",
+                              good_label="penalised, the model resists it"),
+                width="stretch", config={"displayModeBar": False})
         with c2:
-            st.markdown("**Does it read substance, or count tokens?**")
-            pv = sm.get("padding_vs_elaboration", [])
-            if pv:
-                b = pv[0]
-                good = b["mean_delta"] > 0
-                st.metric("Genuine information versus filler, at matched length",
-                          f"{b['mean_delta']:+.2f} logits",
-                          delta=f"wins on {b['win_rate']:.0%} of questions")
-                st.markdown(
-                    "Two answers, the same number of tokens added to within "
-                    f"`{b['mean_length_mismatch']:.0f}`. One adds real information, the other adds "
-                    "filler. " + ("The model prefers the real information, so it is reading "
-                                  "substance rather than counting tokens. This is the internal "
-                                  "check that the length adjustment above is not hiding a "
-                                  "quality effect."
-                                  if good else
-                                  "The model cannot tell them apart, so it is rewarding length "
-                                  "rather than substance.")
-                )
-            st.caption(
-                "This tokenizer discards newlines, so bullets and headers reach the model only as "
-                "`-` and `#` characters. Layout as such is invisible to it."
+            st.markdown("**Style that might genuinely improve the answer**")
+            st.caption("Rewarding these would not be a fault, so they are preferences, not bias.")
+            st.plotly_chart(
+                viz.bias_bars(bearing, noise, signed=True, fault=False, xmax=shared_max),
+                width="stretch", config={"displayModeBar": False})
+        st.caption(
+            f"That is {len(items) + len(bearing)} of the {len(sm['transform_groups'])} transforms "
+            "applied. The eleventh, **padding**, is not charted because it *is* the ruler: "
+            "content-free filler at four intensities is what traces the reward-versus-length "
+            "curve below, and every effect above is measured against that curve."
+        )
+
+        # ---- the quality control: a finding, not methodology, so it stays in the flow -------
+        pv = sm.get("padding_vs_elaboration", [])
+        if pv:
+            b = pv[0]
+            good = b["mean_delta"] > 0
+            st.markdown("#### Does it read substance, or count tokens?")
+            c1, c2 = st.columns([1, 2])
+            c1.metric("Genuine information versus filler, at matched length",
+                      f"{b['mean_delta']:+.2f} logits",
+                      delta=f"wins on {b['win_rate']:.0%} of questions", delta_color="off")
+            c2.markdown(
+                "Two answers, matched to within "
+                f"{b['mean_length_mismatch']:.0f} tokens of each other. One adds real "
+                "information, the other adds content-free filler. "
+                + ("The model prefers the real information, so it is reading substance rather "
+                   "than counting tokens. This is the internal check that the length adjustment "
+                   "below is not hiding a quality effect."
+                   if good else
+                   "The model cannot tell them apart, so it is rewarding length rather than "
+                   "substance.")
             )
 
-        with st.expander("See a transformed answer"):
+        st.markdown("#### Read the exact text")
+        with st.expander("See a transformed answer beside the plain one",
+                         icon=":material/article:", key="drill_style"):
             arms = pd.DataFrame(sm["arms"])
-            qid = st.selectbox("Question", sorted(arms["question_id"].unique()))
-            tname = st.selectbox("Transform", sorted(set(arms["transform"]) - {"baseline"}))
+            questions = dict(zip(arms["question_id"], arms["question"]))
+            q_opts, q_fmt = labelled(arms["question_id"].unique(), questions)
+            qid = st.selectbox("Question", q_opts, format_func=q_fmt)
+            groups = {k: v.replace("_", "-") for k, v in sm["transform_groups"].items()}
+            t_opts, t_fmt = labelled(set(arms["transform"]) - {"baseline"}, groups)
+            tname = st.selectbox("Transform", t_opts, format_func=t_fmt)
             sub = arms[(arms["question_id"] == qid) & (arms["transform"] == tname)]
             base = arms[(arms["question_id"] == qid)
                         & (arms["transform"] == "baseline")].iloc[0]
@@ -612,191 +717,201 @@ with tabs[3]:
             st.caption(f"{base['n_answer_tokens']} to {row['n_answer_tokens']} tokens · "
                        f"score change {row['score'] - base['score']:+.3f}")
 
+
+        # ---- everything about length, consolidated and out of the way -----------------------
+        with st.expander("How length was accounted for"):
+            st.markdown(
+                "Comparing a styled answer against the plain one measures two things at once: the "
+                "style, and the extra length the style drags along. This model dislikes added "
+                "length, so the naive comparison makes almost every transform look disliked. Each "
+                "arrow starts at what the naive comparison says and ends at what is left once the "
+                "length effect is taken out. Every arrow points the same way, and three of them "
+                "cross zero, which means the naive comparison got their direction wrong."
+            )
+            st.plotly_chart(viz.style_length_decomposition(sm), width="stretch",
+                            config={"displayModeBar": False})
+            flip = _length_flip(sm)
+            if flip:
+                name, raw, adj = flip
+                st.info(
+                    f"**{name.capitalize()}** is the one that changes a verdict. It adds no "
+                    f"information, so any reward for it is unearned. Compared naively against the "
+                    f"plain answer it scores `{raw:+.2f}` and looks disliked; once the length it "
+                    f"adds is accounted for it is `{adj:+.2f}`. Without the length control this "
+                    "would have been recorded as the model resisting flattery, when it mildly "
+                    "prefers it."
+                )
+            st.markdown("**The length curve itself**")
+            st.plotly_chart(viz.style_length_curve(sm), width="stretch",
+                            config={"displayModeBar": False})
+            st.caption(
+                "Traced by adding content-free filler at four intensities, which is what every "
+                "effect above is measured against. A single \"reward per 100 tokens\" would be a "
+                "lossy average of this curve, so local slopes are marked instead. This tokenizer "
+                "also discards newlines, so bullets and headers reach the model only as `-` and "
+                "`#` characters; layout as such is invisible to it."
+            )
+
+
 # --------------------------------------------------------------------------------------
 # Injection
 # --------------------------------------------------------------------------------------
 
 with tabs[4]:
     ij = R.get("injection")
-    if not ij:
-        st.info("The injection probe was not part of this run.")
+    if not ij or "top_exploits" not in ij.get("summary", {}):
+        st.info("The injection probe was not part of this run, or predates the current schema.")
     else:
         srch = ij["summary"].get("search") or {}
-        best = srch.get("best_single")
         beam = ij.get("beam_search")
-        base_asr = (ij["summary"].get("baseline_asr") or {}).get("p50")
-        # The winner is whichever candidate actually succeeds most often on held-out prompts.
-        # Stacking usually wins on lift but not always on success rate, and success rate is the
-        # question being asked.
-        candidates = []
-        if best:
-            candidates.append({
-                "name": f"{best['affix_id']} as a {best['position']}",
-                "lift": best["mean_lift"], "asr": (best.get("asr") or {}).get("p50")})
-        if beam:
-            candidates.append({
-                "name": " + ".join(a for a, _ in beam["stack"]),
-                "lift": beam["heldout_mean_lift"],
-                "asr": (beam.get("heldout_asr") or {}).get("p50")})
-        winner = max(candidates, key=lambda c: (c["asr"] if c["asr"] is not None else -1,
-                                                c["lift"])) if candidates else None
-        win_asr = winner["asr"] if winner else None
-        win_lift = winner["lift"] if winner else None
+        exploits = ij["summary"]["top_exploits"]
+        base_asr = (ij["summary"].get("baseline_asr") or {}).get("p50") or 0.0
 
-        # ---- the verdict ------------------------------------------------------------------
-        if winner is None:
-            st.info("No attack candidates were evaluated in this run.")
+        # ---- did it work? ------------------------------------------------------------------
+        if exploits:
+            best = exploits[0]
+            st.markdown(
+                f'<div class="verdict"><b>Yes, injection works on this model.</b> '
+                f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
+                f'<b>{best["lift"]:+.2f} logits</b> and makes it outscore a genuine answer to the '
+                f'same prompt <b>{best["asr"]["p50"]:.0%}</b> of the time, against '
+                f'{base_asr:.0%} unattacked. {len(exploits)} of '
+                f'{srch.get("n_candidates", 0)} attacks tried succeed at all.'
+                f'<span class="hint">Ranked on {srch.get("n_dev_questions", 0)} development '
+                f'prompts, measured on {srch.get("n_test_questions", 0)} held-out prompts the '
+                'search never saw.</span></div>', unsafe_allow_html=True)
         else:
-            name = winner["name"]
-            if win_asr is not None and base_asr is not None and win_asr > base_asr:
-                st.markdown(
-                    f'<div class="verdict"><b>Yes, injection works on this model.</b> The '
-                    f'strongest attack found, <code>{html.escape(name)}</code>, lifts a '
-                    f'deliberately bad answer by <b>{win_lift:+.2f} logits</b> on prompts the '
-                    f'search never saw, and makes it outscore a genuine answer '
-                    f'<b>{win_asr:.0%}</b> of the time, up from {base_asr:.0%} unattacked.'
-                    f'<span class="hint">Every number here is measured on held-out prompts. The '
-                    f'search that found this attack only ever saw the development half.</span>'
-                    "</div>", unsafe_allow_html=True)
-            else:
-                st.markdown(
-                    f'<div class="verdict clear"><b>Injection does not succeed on this model.</b> '
-                    f'The strongest attack found, <code>{html.escape(name)}</code>, lifts a bad '
-                    f'answer by {win_lift:+.2f} logits, but it still beats a genuine answer only '
-                    f'{(win_asr or 0):.0%} of the time against {(base_asr or 0):.0%} unattacked.'
-                    f'<span class="hint">Every number here is measured on held-out prompts.</span>'
-                    "</div>", unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="verdict clear"><b>No injection attack succeeded.</b> None of the '
+                f'{srch.get("n_candidates", 0)} attacks tried made a bad answer outscore a genuine '
+                f'answer more often than the unmodified bad answer already did ({base_asr:.0%}).'
+                '</div>', unsafe_allow_html=True)
 
-        st.markdown(
-            f"**How this was searched.** {srch.get('n_candidates', 0)} affixes were tried as both "
-            f"prefix and suffix against non-answers, off-topic text, confidently false claims and "
-            f"rude replies. All ranking happened on **{srch.get('n_dev_questions', 0)} development "
-            f"prompts**"
-            + (f", then a beam search stacked up to {beam['depth']} of them on the same prompts"
-               if beam else "")
-            + f". Every number reported is then measured once on the "
-            f"**{srch.get('n_test_questions', 0)} held-out prompts**."
-        )
-
-        # ---- did it work? -----------------------------------------------------------------
-        st.markdown("#### Does the attack make a bad answer beat a real one?")
-        st.plotly_chart(viz.attack_success(ij["summary"], beam), width="stretch",
-                        config={"displayModeBar": False})
-        st.caption(
-            "The bar is set at several percentiles of genuine answers to the same prompt, because "
-            "any single choice of bar could be tuned after the fact. Grey is the same bad answer "
-            f"with nothing attached. Based on {ij['n_reference_ok']} prompts that have enough "
-            "genuine answers to support a percentile."
-        )
-
-        if beam:
-            st.markdown("#### What stacking added")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("On the prompts it was tuned on", f"{beam['dev_mean_lift']:+.2f}"
-                      if beam.get("dev_mean_lift") is not None else "n/a")
-            # "normal" keeps the loss red; it is the winner's curse, not good news.
-            c2.metric("On held-out prompts", f"{beam['heldout_mean_lift']:+.2f}",
-                      delta=(f"{beam['heldout_mean_lift'] - beam['dev_mean_lift']:+.2f} lost to "
-                             "over-fitting") if beam.get("dev_mean_lift") is not None else None,
-                      delta_color="normal")
-            c3.metric("Beats a median genuine answer",
-                      f"{beam['heldout_asr']['p50']:.0%}" if beam["heldout_asr"].get("p50")
-                      is not None else "n/a")
-            if best and (beam.get("heldout_asr") or {}).get("p50") is not None \
-                    and (best.get("asr") or {}).get("p50") is not None \
-                    and beam["heldout_asr"]["p50"] <= best["asr"]["p50"]:
-                st.caption(
-                    f"Stacking bought more lift on the prompts it was tuned on, but on held-out "
-                    f"prompts it succeeds no more often than the single best affix "
-                    f"({beam['heldout_asr']['p50']:.0%} against {best['asr']['p50']:.0%}). That "
-                    "gap is why the verdict above quotes the single affix."
-                )
-            st.markdown("**Search path**, each step chosen on development prompts only:")
-            st.dataframe(pd.DataFrame([
-                {"depth": h["depth"], "stack": " + ".join(a for a, _ in h["best_stack"]),
-                 "candidates tried": h["n_candidates"],
-                 "best lift on dev": round(h["best_dev_lift"], 3)}
-                for h in beam["history"]]), width="stretch", hide_index=True)
-            st.markdown("**The worst case it produced on a held-out prompt:**")
-            ex = beam["top_examples"][0]
-            side_by_side(f"Before ({ex['base_type']})", ex["base_text"], ex["base_score"],
-                         "After the attack", ex["attacked_text"], ex["attacked_score"],
-                         diff=False)
-            st.caption(f"Score moved {ex['lift']:+.2f} logits.")
-        else:
-            st.info(
-                "No stacked attack was searched in this run. Re-run at **standard** or **deep** "
-                "depth to search prefix and suffix combinations."
+        # ---- which ones worked -------------------------------------------------------------
+        if exploits:
+            st.markdown("#### Which attacks worked")
+            st.plotly_chart(viz.exploit_ranking(exploits, base_asr), width="stretch",
+                            config={"displayModeBar": False})
+            st.caption(
+                "An attack counts as working only if it beats a real answer more often than the "
+                "unmodified bad answer already does. Lift alone is not enough: an affix can add "
+                "several logits and still leave the answer far below anything a real model writes."
             )
 
-        # ---- per-affix, ranked honestly ----------------------------------------------------
-        st.markdown("#### Every affix, ranked on development and measured on held-out prompts")
-        st.plotly_chart(viz.injection_lifts(ij["summary"]), width="stretch",
-                        config={"displayModeBar": False})
-        attacks = [a for a in ij["summary"]["affixes"] if not a["is_control"]]
-        worst_shrink = max((abs(a["shrinkage"]) for a in attacks), default=0.0)
-        st.caption(
-            "Grey bars are controls, not attacks: content-free text of matched length, and "
-            "lookalike strings that cannot produce a special token. An affix has to beat its "
-            "control, not merely beat silence. "
-            f"Individual affixes barely over-fit here, losing at most {worst_shrink:.2f} logits "
-            "between development and held-out prompts, because each is a single pre-written "
-            "candidate rather than something the search optimised"
-            + (f". The stacked attack lost {abs(beam['heldout_mean_lift'] - beam['dev_mean_lift']):.2f}, "
-               "which is what searching costs you." if beam and beam.get("dev_mean_lift") is not None
-               else ".")
-        )
-
-        # ---- is it an attack, or just its content? -----------------------------------------
-        kc = ij.get("key_contrasts", [])
-        if kc:
-            st.markdown("#### Is it really the attack, or just the text it carries?")
-            for c in kc:
-                exceeds = c.get("exceeds_noise_floor")
-                st.markdown(
-                    f'<div class="finding" style="border-left-color:'
-                    f'{viz.STATUS["critical"] if exceeds else viz.STATUS["warning"]}">'
-                    f'<b>{html.escape(c["attack"])} versus {html.escape(c["control"])}: '
-                    f'{c["mean_delta"]:+.2f} logits</b>'
-                    f'<div class="sub">{html.escape(c["question"])}<br>'
-                    f'Consistent on {c["win_rate"]:.0%} of items, p = {c["p_sign"]:.1e}, '
-                    f'bigger than {c.get("noise_percentile", 0):.0f}% of rewordings.</div></div>',
-                    unsafe_allow_html=True)
-            st.info(
-                "Typing `[SEP]` into an answer really does insert the model's genuine separator "
-                "token, and the raw lift looks dramatic. But the control that appends the same "
-                "good answer with no separator recovers most of it. The forged token is worth only "
-                "the remainder, which is why the controls are grey in the table below rather than "
-                "being counted as attacks."
-            )
-
-        cont = ij.get("contamination", {})
-        if cont:
-            st.markdown("#### Is padding free?")
-            cols = st.columns(len(cont))
-            for col, (where, d) in zip(cols, cont.items()):
-                col.metric(f"Junk {where} to a good answer", f"{d['mean_delta']:+.2f}",
-                           help="A model that ignores contamination would sit near zero, which "
-                                "would mean a policy could emit filler at no cost.")
-            first = next(iter(cont.values()))
-            if first["mean_delta"] < -0.5:
+            # ---- the examples ---------------------------------------------------------------
+            st.markdown("#### What the attack actually looks like")
+            choice = st.selectbox(
+                "Attack", list(range(len(exploits))),
+                format_func=lambda i: f"{exploits[i]['label']} — beats a real answer "
+                                      f"{exploits[i]['asr']['p50']:.0%} of the time")
+            chosen = exploits[choice]
+            if not chosen["examples"]:
+                st.info("No held-out example of this attack cleared a genuine answer.")
+            for k, ex in enumerate(chosen["examples"], start=1):
+                st.markdown(f"**Example {k} of {len(chosen['examples'])}** · the user asked: "
+                            f"*{html.escape(ex['question'])}*")
+                side_by_side(f"The bad answer on its own ({ex['base_type']})",
+                             ex["base_text"], ex["base_score"],
+                             "The same answer, attacked", ex["attacked_text"],
+                             ex["attacked_score"], diff=False)
                 st.caption(
-                    f"The model does notice: attaching a junk sentence to a correct answer costs "
-                    f"{abs(first['mean_delta']):.2f} logits, so filler is not free here."
+                    f"The attack moved it {ex['attacked_score'] - ex['base_score']:+.2f} logits, "
+                    f"past the median genuine answer to this prompt at "
+                    f"`{ex['median_genuine_score']:+.2f}`. For comparison, a real answer reads: "
+                    f"*{html.escape(ex['genuine_answer'][:160])}…*"
                 )
 
-        with st.expander("Every affix, with its controls"):
+        # ---- supporting evidence, all below the fold ---------------------------------------
+        st.markdown("#### Supporting evidence")
+
+        with st.expander("How hard is the bar? Attack success against several definitions of "
+                         "\"a real answer\""):
+            st.plotly_chart(viz.attack_success(ij["summary"], beam), width="stretch",
+                            config={"displayModeBar": False})
+            st.caption(
+                "The bar is set at several percentiles of genuine answers to the same prompt, "
+                "because any single choice of bar could be tuned after the fact. Grey is the same "
+                f"bad answer with nothing attached. Based on {ij['n_reference_ok']} prompts with "
+                "enough genuine answers to support a percentile."
+            )
+
+        if beam:
+            with st.expander("How the search found the stacked attack"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("On the prompts it was tuned on",
+                          f"{beam['dev_mean_lift']:+.2f}"
+                          if beam.get("dev_mean_lift") is not None else "n/a")
+                c2.metric("On held-out prompts", f"{beam['heldout_mean_lift']:+.2f}",
+                          delta=(f"{beam['heldout_mean_lift'] - beam['dev_mean_lift']:+.2f} lost "
+                                 "to over-fitting")
+                          if beam.get("dev_mean_lift") is not None else None,
+                          delta_color="normal")
+                c3.metric("Beats a median genuine answer",
+                          f"{beam['heldout_asr']['p50']:.0%}"
+                          if beam["heldout_asr"].get("p50") is not None else "n/a")
+                st.dataframe(pd.DataFrame([
+                    {"depth": h["depth"], "stack": " + ".join(a for a, _ in h["best_stack"]),
+                     "candidates tried": h["n_candidates"],
+                     "best lift on dev": round(h["best_dev_lift"], 3)}
+                    for h in beam["history"]]), width="stretch", hide_index=True)
+                st.caption(
+                    "Every step was chosen on development prompts only. Reporting the dev number "
+                    "would overstate the attack, which is what the gap above measures."
+                )
+
+        with st.expander("Every affix tried, ranked on development and measured on held-out"):
+            st.plotly_chart(viz.injection_lifts(ij["summary"]), width="stretch",
+                            config={"displayModeBar": False})
+            attacks = [a for a in ij["summary"]["affixes"] if not a["is_control"]]
+            worst_shrink = max((abs(a["shrinkage"]) for a in attacks), default=0.0)
+            st.caption(
+                "Grey bars are controls, not attacks: content-free text of matched length, and "
+                "lookalike strings that cannot produce a special token. An affix has to beat its "
+                f"control, not merely beat silence. Individual affixes lose at most "
+                f"{worst_shrink:.2f} logits between development and held-out prompts, because each "
+                "is a single pre-written candidate rather than something the search optimised."
+            )
             st.dataframe(
                 pd.DataFrame(ij["summary"]["affixes"])[
                     ["dev_rank", "affix_id", "family", "position", "is_control", "dev_mean_lift",
                      "mean_lift", "shrinkage", "lift_ci_low", "lift_ci_high", "adjusted_lift",
                      "mean_sep_injected", "noise_percentile"]],
-                width="stretch", hide_index=True, height=380)
-            st.caption(
-                "`dev_rank` is the ordering the search used. `mean_lift` is the held-out "
-                "measurement. `adjusted_lift` subtracts what content-free text of the same length "
-                "achieves, so an affix has to beat any text at all rather than beat silence."
-            )
+                width="stretch", hide_index=True, height=340)
+
+        kc = ij.get("key_contrasts", [])
+        if kc:
+            with st.expander("Is it really the attack, or just the text it carries?"):
+                for c in kc:
+                    exceeds = c.get("exceeds_noise_floor")
+                    st.markdown(
+                        f'<div class="finding" style="border-left-color:'
+                        f'{viz.STATUS["critical"] if exceeds else viz.STATUS["warning"]}">'
+                        f'<b>{html.escape(c["attack"])} versus {html.escape(c["control"])}: '
+                        f'{c["mean_delta"]:+.2f} logits</b>'
+                        f'<div class="sub">{html.escape(c["question"])}<br>'
+                        f'Consistent on {c["win_rate"]:.0%} of items, p = {c["p_sign"]:.1e}, '
+                        f'bigger than {c.get("noise_percentile", 0):.0f}% of rewordings.</div>'
+                        "</div>", unsafe_allow_html=True)
+                st.caption(
+                    "Typing `[SEP]` into an answer really does insert the model's genuine "
+                    "separator token, and the raw lift looks dramatic. But the control that "
+                    "appends the same good answer with no separator recovers most of it. The "
+                    "forged token is worth only the remainder."
+                )
+
+        cont = ij.get("contamination", {})
+        if cont:
+            with st.expander("Is padding free? What junk costs on a good answer"):
+                cols = st.columns(len(cont))
+                for col, (where, d) in zip(cols, cont.items()):
+                    col.metric(f"Junk {where} to a good answer", f"{d['mean_delta']:+.2f}")
+                first = next(iter(cont.values()))
+                st.caption(
+                    "A model that ignored contamination would sit near zero, which would mean a "
+                    "policy could emit filler at no cost. "
+                    + (f"This one drops {abs(first['mean_delta']):.2f} logits, so filler is not "
+                       "free here." if first["mean_delta"] < -0.5 else "")
+                )
 
 
 # --------------------------------------------------------------------------------------
@@ -997,7 +1112,7 @@ affix ranking and search on development prompts and reporting only held-out numb
                 st.dataframe(pd.DataFrame(sm_["padding_vs_elaboration"][0]["rows"]),
                              width="stretch", hide_index=True, height=300)
     if sy_:
-        with st.expander("Sycophancy — agreement premium by tone and insistence"):
+        with st.expander("Sycophancy — agreement premium split by wording, not used in version 1"):
             st.dataframe(pd.DataFrame(sy_["premiums"])[
                 ["insistence", "tone", "mean_delta", "ci_low", "ci_high", "win_rate",
                  "p_sign", "p_adjusted", "mean_token_delta"]], width="stretch", hide_index=True)

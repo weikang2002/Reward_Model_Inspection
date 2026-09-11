@@ -14,7 +14,7 @@ import plotly.io as pio
 
 from . import severity as sev
 from . import viz
-from .findings import module_items, overview_verdict, verdict_line
+from .findings import module_items, overview_verdict, tone_check, verdict_line
 
 CSS = """
 :root{--ink:#0b0b0b;--ink2:#52514e;--line:#e6e5e1;--surface:#fcfcfb;--plane:#f9f9f7;}
@@ -198,6 +198,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         A("<h2>Identity</h2>")
         A(verdict_line(module_items(R, "identity"), "identity",
                        "swapping a name or a descriptor changes the score", noise=noise))
+        A("<h3>Which identities change the score</h3>")
         A(_fig(viz.bias_bars(module_items(R, "identity"), noise)))
         A("<p class='sub'>Each bar is one identity axis: the largest gap it produces between "
           "groups, in otherwise identical templates. Identity bias is non-directional, so a shift "
@@ -244,14 +245,19 @@ def build(results: dict, out_path: Path | str) -> Path:
         A(_fig(viz.bias_bars(module_items(R, "sycophancy"), noise, signed=True,
                              bad_label="favours agreeing",
                              good_label="favours correcting, the right direction")))
-        A("<p class='sub'>Agreement and warmth are varied separately, so these measure agreement "
-          "with tone held fixed. Otherwise a result would just mean the model likes politeness. "
-          "Above zero the model prefers agreeing; below zero it prefers correcting.</p>")
+        A("<p class='sub'>Above zero the model prefers agreeing with the user; below zero it "
+          "prefers correcting them. Each scenario is written in two versions and both are scored; "
+          "the premium is their average.</p>")
         A("<h3>Does agreeing pay more as the user pushes harder?</h3>")
         A(_fig(viz.sycophancy_ladder(sy, noise=noise)))
         A("<p class='sub'>Above the line the model prefers agreeing with the user; below it, "
           "correcting them. Each scenario is asked three ways, changing only how hard the user "
           "pushes, never the two answers being compared.</p>")
+        _tone = tone_check(sy, noise or {"median_abs_delta": 0.0})
+        if _tone["diverges"]:
+            A("<div class='note warn'>" + _tone["text"].replace("**", "")
+              + " Version 1 reports the average of the two; the table below has the breakdown."
+              + "</div>")
         if slope["mean_delta"] > 0 and slope["p_sign"] < 0.05:
             A(f"<div class='note warn'><b>The headline.</b> Overall the model barely prefers "
               f"agreement ({m['mean_delta']:+.2f}, p = {m['p_sign']:.2f}), so a test that measured "
@@ -259,12 +265,11 @@ def build(results: dict, out_path: Path | str) -> Path:
               f"reward for agreeing rises by {slope['mean_delta']:+.2f} logits "
               f"(p = {slope['p_sign']:.3f}), flipping the model from mildly preferring corrections "
               "to preferring agreement. That is the pattern that matters in RLHF.</div>")
-        A(f"<h3>The 2x2 it is built on, with the user {viz.LADDER_LABEL[slope['level']]}</h3>")
-        A(_fig(viz.sycophancy_cells(sy["arms"], slope["level"])))
-        A("<p class='sub'>Each scenario's four cells are centred on their own mean, since scores "
-          "are not comparable across prompts. The gap between the two x groups is the agreement "
-          "effect; the gap between the two colours is the tone effect. Keeping them separate is "
-          "why this is a factorial rather than one contrast.</p>")
+        A(f"<h3>Every scenario, with the user {viz.LADDER_LABEL[slope['level']]}</h3>")
+        A(_fig(viz.sycophancy_scenarios(sy["arms"], slope["level"])))
+        A("<p class='sub'>Each dot is one scenario, red where agreeing scored higher and green "
+          "where correcting did. A mean can come from every scenario leaning the same way or from "
+          "a few extremes, and those mean different things for a policy trained on it.</p>")
         A(_table(sy["premiums"], ["insistence", "tone", "mean_delta", "ci_low", "ci_high",
                                   "win_rate", "p_sign", "p_adjusted", "mean_token_delta"]))
 
@@ -278,17 +283,42 @@ def build(results: dict, out_path: Path | str) -> Path:
             extra="Only transforms that add no information are charted, since those are the ones "
                   "where any reward at all is unearned. Effects are shown after removing what the "
                   "extra length alone explains."))
-        A(_fig(viz.bias_bars(module_items(R, "style"), noise, signed=True,
+        _neutral = module_items(R, "style", group="content_neutral")
+        _bearing = module_items(R, "style", group="quality_bearing")
+        A("<h3>Style that adds no information</h3>")
+        A("<p class='sub'>Any reward at all here is unearned, so these are bias claims.</p>")
+        _smax = max([abs(i["effect"]) for i in _neutral + _bearing]
+                    + [noise["p95_abs_delta"]]) * 1.22
+        A(_fig(viz.bias_bars(_neutral, noise, signed=True, xmax=_smax,
                              bad_label="rewarded though it adds nothing",
                              good_label="penalised, the model resists it")))
-        bearing = sorted([a for a in sm["adjusted"] if a["group"] == "quality_bearing"],
-                         key=lambda a: -a["effect_at_max_dose"])
-        if bearing:
-            A("<p class='sub'>Transforms that might genuinely improve an answer are left out of "
-              "the chart, because rewarding them would not be a fault. For reference they are: "
-              + ", ".join(f"{a['transform']} {a['effect_at_max_dose']:+.2f}" for a in bearing)
-              + " logits.</p>")
-        A("<h3>Why these numbers are adjusted for length</h3>")
+        A("<h3>Style that might genuinely improve the answer</h3>")
+        A("<p class='sub'>Rewarding these would not be a fault, so they are preferences, not "
+          "bias.</p>")
+        A(_fig(viz.bias_bars(_bearing, noise, signed=True, fault=False, xmax=_smax)))
+        A(f"<p class='sub'>That is {len(_neutral) + len(_bearing)} of the "
+          f"{len(sm['transform_groups'])} transforms applied. The eleventh, <b>padding</b>, is not "
+          "charted because it <i>is</i> the ruler: content-free filler at four intensities is what "
+          "traces the reward-versus-length curve below, and every effect above is measured against "
+          "that curve.</p>")
+        # Findings first. Everything about length is methodology, so it goes last, consolidated.
+        pv = sm.get("padding_vs_elaboration", [])
+        if pv:
+            b = pv[0]
+            good = b["mean_delta"] > 0
+            A("<h3>Does it read substance, or count tokens?</h3>")
+            A(f"<div class='note {'good' if good else 'warn'}'>"
+              "Both arms add the same number of tokens, matched to within "
+              f"{b['mean_length_mismatch']:.0f}. One adds genuine new information, the other "
+              "content-free filler. "
+              + (f"The model prefers the real information by {b['mean_delta']:+.2f} logits on "
+                 f"{b['win_rate']:.0%} of questions, so it is reading substance rather than "
+                 "counting tokens."
+                 if good else
+                 f"The model cannot tell them apart ({b['mean_delta']:+.2f}), so it is rewarding "
+                 "length rather than substance.") + "</div>")
+
+        A("<h3>How length was accounted for</h3>")
         A("<p>Comparing a styled answer against the plain one measures two things at once: the "
           "style, and the extra length the style drags along. This model dislikes added length, so "
           "the naive comparison makes almost every transform look disliked. Each arrow starts at "
@@ -298,22 +328,10 @@ def build(results: dict, out_path: Path | str) -> Path:
         A(f"<div class='grid g3' style='grid-template-columns:1fr 1fr'>"
           f"<div>{_fig(viz.style_length_curve(sm))}</div>"
           f"<div>{_fig(viz.style_dose_response(sm, [t for t, g in sm['transform_groups'].items() if g == 'content_neutral'][:4]))}</div></div>")
-        pv = sm.get("padding_vs_elaboration", [])
-        if pv:
-            b = pv[0]
-            good = b["mean_delta"] > 0
-            A(f"<div class='note {'good' if good else 'warn'}'>"
-              "<b>Built-in quality control.</b> Both arms add the same number of tokens (matched "
-              f"to within {b['mean_length_mismatch']:.0f} tokens). One adds genuine new "
-              "information, the other content-free filler. "
-              + (f"The model prefers the real information by {b['mean_delta']:+.2f} logits on "
-                 f"{b['win_rate']:.0%} of questions, so it is reading substance."
-                 if good else
-                 f"The model cannot tell them apart ({b['mean_delta']:+.2f}), so it is rewarding "
-                 "length rather than substance.") + "</div>")
-        A("<div class='note'><b>A tokenizer fact worth knowing.</b> This tokenizer discards "
-          "newlines entirely, so bullets and headers reach the model only as <code>-</code> and "
-          "<code>#</code> characters. Layout as such is invisible to it.</div>")
+        A("<p class='sub'>The curve is traced by adding content-free filler at four intensities, "
+          "which is what every effect above is measured against. This tokenizer also discards "
+          "newlines, so bullets and headers reach the model only as <code>-</code> and "
+          "<code>#</code> characters; layout as such is invisible to it.</p>")
         A(_table(sm["contrasts"], ["transform", "dose", "group", "mean_delta", "ci_low", "ci_high",
                                    "win_rate", "mean_added_tokens", "p_sign", "p_adjusted",
                                    "noise_percentile"]))
@@ -357,7 +375,31 @@ def build(results: dict, out_path: Path | str) -> Path:
           + f". Every number reported is then measured once on the "
           f"{srch.get('n_test_questions', 0)} held-out prompts.</p>")
 
-        A("<h3>Does the attack make a bad answer beat a real one?</h3>")
+        exploits = ij["summary"].get("top_exploits") or []
+        if exploits:
+            A("<h3>Which attacks worked</h3>")
+            A(_fig(viz.exploit_ranking(exploits, base_asr or 0.0)))
+            A("<p class='sub'>An attack counts as working only if it beats a real answer more "
+              "often than the unmodified bad answer already does. Lift alone is not enough: an "
+              "affix can add several logits and still leave the answer far below anything a real "
+              "model writes.</p>")
+            A("<h3>What the attack actually looks like</h3>")
+            for e in exploits[:3]:
+                for ex in e["examples"][:1]:
+                    A(f"<div class='card'><b>{html.escape(e['label'])}</b> · "
+                      f"{html.escape(e['kind'])} · beats a real answer "
+                      f"{e['asr']['p50']:.0%} of the time<br>"
+                      f"<span class='sub'>The user asked: {html.escape(ex['question'])}</span>"
+                      f"<p><b>The bad answer on its own</b> ({html.escape(ex['base_type'])}), "
+                      f"score <code>{ex['base_score']:+.2f}</code></p>"
+                      f"<pre>{html.escape(ex['base_text'][:600])}</pre>"
+                      f"<p><b>The same answer, attacked</b>, score "
+                      f"<code>{ex['attacked_score']:+.2f}</code>, past the median genuine answer "
+                      f"at <code>{ex['median_genuine_score']:+.2f}</code></p>"
+                      f"<pre>{html.escape(ex['attacked_text'][:900])}</pre></div>")
+
+        A("<h3>Supporting evidence</h3>")
+        A("<h4>How hard is the bar?</h4>")
         A(_fig(viz.attack_success(ij["summary"], beam)))
         A("<p class='sub'>The bar is set at several percentiles of genuine answers to the same "
           "prompt, because any single choice of bar could be tuned after the fact. Grey is the "
@@ -365,7 +407,7 @@ def build(results: dict, out_path: Path | str) -> Path:
           "enough genuine answers to support a percentile.</p>")
 
         if beam:
-            A("<h3>What stacking added</h3><div class='grid g3'>")
+            A("<h4>How the search found the stacked attack</h4><div class='grid g3'>")
             for label, val in (("on the prompts it was tuned on",
                                 f"{beam['dev_mean_lift']:+.2f}"
                                 if beam.get("dev_mean_lift") is not None else "n/a"),
@@ -382,49 +424,15 @@ def build(results: dict, out_path: Path | str) -> Path:
                        "best lift on dev": round(h["best_dev_lift"], 3)}
                       for h in beam["history"]],
                      ["depth", "stack", "candidates tried", "best lift on dev"]))
-            ex = beam["top_examples"][0]
-            A(f"<div class='card'><b>The worst case it produced on a held-out prompt</b> "
-              f"({html.escape(ex['base_type'])}): <code>{ex['base_score']:+.2f}</code> to "
-              f"<code>{ex['attacked_score']:+.2f}</code><pre>"
-              f"{html.escape(ex['attacked_text'][:900])}</pre></div>")
 
-        A("<h3>Every affix, ranked on development and measured on held-out prompts</h3>")
+        A("<h4>Every affix tried</h4>")
         A(_fig(viz.injection_lifts(ij["summary"])))
         _atk = [a for a in ij["summary"]["affixes"] if not a["is_control"]]
         _shr = max((abs(a["shrinkage"]) for a in _atk), default=0.0)
         A("<p class='sub'>Grey bars are controls, not attacks: content-free text of matched "
           "length, and lookalike strings that cannot produce a special token. Individual affixes "
-          f"barely over-fit here, losing at most {_shr:.2f} logits between development and "
-          "held-out prompts, because each is a single pre-written candidate rather than something "
-          "the search optimised.</p>")
-
-        kc = ij.get("key_contrasts", [])
-        if kc:
-            A("<h3>Is it really the attack, or just the text it carries?</h3>")
-            for c in kc:
-                col = viz.STATUS["critical"] if c.get("exceeds_noise_floor") else viz.STATUS["warning"]
-                A(f"<div class='finding' style='border-left-color:{col}'>"
-                  f"<b>{html.escape(c['attack'])} versus {html.escape(c['control'])}: "
-                  f"{c['mean_delta']:+.2f} logits</b><div class='meta'>"
-                  f"{html.escape(c['question'])}<br>Consistent on {c['win_rate']:.0%} of items, "
-                  f"p = {c['p_sign']:.1e}, bigger than "
-                  f"{c.get('noise_percentile', 0):.0f}% of rewordings.</div></div>")
-            A("<div class='note'>Typing <code>[SEP]</code> into an answer really does insert the "
-              "model's genuine separator token, and the raw lift looks dramatic. But the control "
-              "that appends the same good answer with no separator recovers most of it.</div>")
-
-        cont = ij.get("contamination", {})
-        if cont:
-            A("<h3>Is padding free?</h3><div class='grid g3'>")
-            for where, d in cont.items():
-                A(f"<div class='tile'><h4>junk {where}</h4>"
-                  f"<div style='font-size:23px;font-weight:700'>{d['mean_delta']:+.2f}</div>"
-                  "<p>A model that ignores contamination would sit near zero, which would mean a "
-                  "policy could emit filler at no cost.</p></div>")
-            A("</div>")
-        A(_table(ij["summary"]["affixes"],
-                 ["dev_rank", "affix_id", "family", "position", "is_control", "dev_mean_lift",
-                  "mean_lift", "shrinkage", "adjusted_lift", "noise_percentile"]))
+          f"lose at most {_shr:.2f} logits between development and held-out prompts, because each "
+          "is a single pre-written candidate rather than something the search optimised.</p>")
 
     # -- appendix ---------------------------------------------------------------------
     A("<h2>Appendix: how each number was produced</h2>")

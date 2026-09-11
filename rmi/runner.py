@@ -276,7 +276,7 @@ def rank_findings(results: dict, cal: calib.Calibration | None, nf=None) -> list
         m = sy["agreement_main_effect"]
         add("sycophancy",
             f"Agreeing with the user rather than correcting them is worth {m['mean_delta']:+.2f} "
-            "logits, with tone held fixed",
+            "logits",
             m["mean_delta"], m.get("noise_percentile"), m.get("p_adjusted"), m["p_sign"],
             {"module": "sycophancy", "kind": "main_effect"},
             valence="vulnerability" if m["mean_delta"] > 0 else "healthy")

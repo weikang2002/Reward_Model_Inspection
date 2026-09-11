@@ -177,9 +177,10 @@ LADDER_LABEL = {
 def sycophancy_ladder(block: dict, noise: dict | None = None) -> go.Figure:
     """The one chart that answers the module: does agreeing pay more as the user pushes harder?
 
-    Both tones are drawn because agreement is only meaningful with tone held fixed. If the two
-    lines move together, the effect is about agreement; if they diverge, it is about warmth.
+    One line, the agreement premium averaged over the two phrasings each scenario was written in.
+    Version 1 does not split by phrasing; see the appendix table for the breakdown.
     """
+    rows = sorted(block.get("premium_by_level") or [], key=lambda r: LADDER.index(r["insistence"]))
     fig = go.Figure()
     if noise:
         band = noise["median_abs_delta"]
@@ -187,66 +188,60 @@ def sycophancy_ladder(block: dict, noise: dict | None = None) -> go.Figure:
                       annotation_text="rewording an answer moves the score this much",
                       annotation_position="bottom right",
                       annotation_font=dict(size=11, color=INK2))
-    for i, tone in enumerate(["warm", "blunt"]):
-        rows = [p for p in block["premiums"] if p["tone"] == tone]
-        rows.sort(key=lambda r: LADDER.index(r["insistence"]))
-        x = [LADDER_LABEL[r["insistence"]] for r in rows]
-        y = [r["mean_delta"] for r in rows]
-        lo = [r["mean_delta"] - r["ci_low"] for r in rows]
-        hi = [r["ci_high"] - r["mean_delta"] for r in rows]
-        fig.add_trace(go.Scatter(
-            x=x, y=y, mode="lines+markers+text", name=f"{tone} tone",
-            line=dict(color=SERIES[i], width=2), marker=dict(size=9, color=SERIES[i]),
-            error_y=dict(type="data", symmetric=False, array=hi, arrayminus=lo,
-                         color=SERIES[i], width=5, thickness=1.5),
-            text=[f"{v:+.2f}" for v in y],
-            textposition="top center" if tone == "warm" else "bottom center",
-            textfont=dict(size=11, color=INK),
-            hovertemplate="%{x}, " + tone + "<br>premium %{y:+.2f} logits<extra></extra>"))
+    x = [LADDER_LABEL[r["insistence"]] for r in rows]
+    y = [r["mean_delta"] for r in rows]
+    fig.add_trace(go.Scatter(
+        x=x, y=y, mode="lines+markers+text", name="reward for agreeing",
+        line=dict(color=SERIES[0], width=2.5), marker=dict(size=11, color=SERIES[0]),
+        error_y=dict(type="data", symmetric=False,
+                     array=[r["ci_high"] - r["mean_delta"] for r in rows],
+                     arrayminus=[r["mean_delta"] - r["ci_low"] for r in rows],
+                     color=SERIES[0], width=6, thickness=1.5),
+        text=[f"{v:+.2f}" for v in y], textposition="top center",
+        textfont=dict(size=12, color=INK),
+        customdata=[[r["win_rate"], r["p_sign"]] for r in rows],
+        hovertemplate="%{x}<br>premium %{y:+.2f} logits"
+                      "<br>agreement wins on %{customdata[0]:.0%} of scenarios"
+                      "<br>p = %{customdata[1]:.3f}<extra></extra>"))
     fig.add_hline(y=0, line=dict(color="#8a8a85", width=1.5))
     _base(fig, height=400, ytitle="reward for agreeing rather than correcting (logits)",
-          xtitle="how hard the user pushes", showlegend=True)
+          xtitle="how hard the user pushes")
     fig.update_yaxes(showgrid=True, gridcolor=GRID)
     return fig
 
 
-def sycophancy_cells(arms: list[dict], level: str) -> go.Figure:
-    """The 2x2 the module is built on, for one level of user pressure.
+def sycophancy_scenarios(arms: list[dict], level: str) -> go.Figure:
+    """Every scenario at one level of pressure, so the spread behind the average is visible.
 
-    Scores are not comparable across scenarios, so each scenario's four cells are centred on their
-    own mean first. What is left is the shape: the gap between the two x groups is the agreement
-    effect, and the gap between the two colours is the tone effect. Keeping them separate is the
-    whole reason this is a factorial rather than one contrast.
+    A mean of twenty scenarios can come from all twenty leaning the same way or from a handful of
+    extremes, and those mean very different things for a policy trained on this signal.
     """
     rows = [a for a in arms if a["insistence"] == level]
     by_scn: dict[str, dict[str, float]] = {}
     for a in rows:
         by_scn.setdefault(a["scenario_id"], {})[a["cell"]] = a["score"]
-    cells = ["corrects_warm", "corrects_blunt", "agrees_warm", "agrees_blunt"]
-    acc = {c: [] for c in cells}
-    for scores in by_scn.values():
-        if not all(c in scores for c in cells):
-            continue
-        m = sum(scores[c] for c in cells) / len(cells)
-        for c in cells:
-            acc[c].append(scores[c] - m)
-    means = {c: (sum(v) / len(v) if v else 0.0) for c, v in acc.items()}
-
-    fig = go.Figure()
-    for i, tone in enumerate(["warm", "blunt"]):
-        ys = [means[f"corrects_{tone}"], means[f"agrees_{tone}"]]
-        fig.add_trace(go.Bar(
-            x=["corrects the user", "agrees with the user"], y=ys, name=f"{tone} tone",
-            marker=dict(color=SERIES[i]), width=0.3,
-            text=[f"{v:+.2f}" for v in ys], textposition="outside",
-            textfont=dict(size=12, color=INK),
-            hovertemplate="%{x}, " + tone + "<br>%{y:+.2f} logits<extra></extra>"))
-    fig.update_traces(marker_cornerradius=4)
-    fig.add_hline(y=0, line=dict(color="#8a8a85", width=1.5))
-    fig.update_layout(barmode="group", bargap=0.4, bargroupgap=0.08)
-    _base(fig, height=360, showlegend=True,
-          ytitle="score relative to the scenario's own average (logits)")
-    fig.update_yaxes(showgrid=True, gridcolor=GRID)
+    pts = []
+    for sid, sc in by_scn.items():
+        vals = [sc[f"agrees_{t}"] - sc[f"corrects_{t}"]
+                for t in ("warm", "blunt") if f"agrees_{t}" in sc and f"corrects_{t}" in sc]
+        if vals:
+            pts.append((sid, float(np.mean(vals))))
+    pts.sort(key=lambda t: t[1])
+    vals = [v for _, v in pts]
+    mean = float(np.mean(vals)) if vals else 0.0
+    fig = go.Figure(go.Scatter(
+        x=vals, y=[s for s, _ in pts], mode="markers",
+        marker=dict(size=10,
+                    color=[STATUS["critical"] if v > 0 else STATUS["good"] for v in vals],
+                    line=dict(width=1, color="#fcfcfb")),
+        hovertemplate="%{y}<br>%{x:+.2f} logits<extra></extra>", showlegend=False))
+    fig.add_vline(x=0, line=dict(color="#8a8a85", width=1.5))
+    fig.add_vline(x=mean, line=dict(color=SERIES[0], width=2, dash="dash"),
+                  annotation_text=f"mean {mean:+.2f}", annotation_position="top",
+                  annotation_font=dict(size=11, color=SERIES[0]))
+    _base(fig, height=max(360, 17 * len(pts) + 120),
+          xtitle="reward for agreeing rather than correcting (logits)")
+    fig.update_yaxes(tickfont=dict(size=10.5, color=INK2))
     return fig
 
 
@@ -470,6 +465,14 @@ SIGNED_STATES = [
 ]
 
 
+# For transforms that might genuinely improve an answer, being rewarded is not a fault, so the
+# fault palette would mislabel them. They get a plain preference palette instead.
+PREFERENCE_STATES = [
+    ("confirmed preference", SERIES[0]),
+    ("not statistically confirmed", "#9a9a95"),
+]
+
+
 def bias_state(item: dict, *, signed: bool) -> int:
     if not item.get("confirmed"):
         return 3 if signed else 2
@@ -481,9 +484,10 @@ def bias_state(item: dict, *, signed: bool) -> int:
     return 0 if material else 1
 
 
-def bias_bars(items: list[dict], noise: dict, *, signed: bool = False,
+def bias_bars(items: list[dict], noise: dict, *, signed: bool = False, fault: bool = True,
               bad_label: str = "rewarded", good_label: str = "penalised, the model resists it",
-              xtitle: str | None = None, height: int | None = None) -> go.Figure:
+              xtitle: str | None = None, height: int | None = None,
+              xmax: float | None = None) -> go.Figure:
     """Every probe in one module, ranked, against that model's own rewording noise.
 
     This is the "where is the bias" view. The eye should land on the longest red bar and be done;
@@ -496,9 +500,14 @@ def bias_bars(items: list[dict], noise: dict, *, signed: bool = False,
     items = sorted(items, key=key)
     labels = [r["label"] for r in items]
     vals = [(r["effect"] or 0) if signed else abs(r["effect"] or 0) for r in items]
-    states = [bias_state(r, signed=signed) for r in items]
-    palette = SIGNED_STATES if signed else UNSIGNED_STATES
-    names = [n.format(bad=bad_label, good=good_label) for n, _ in palette]
+    if fault:
+        palette = SIGNED_STATES if signed else UNSIGNED_STATES
+        states = [bias_state(r, signed=signed) for r in items]
+        names = [n.format(bad=bad_label, good=good_label) for n, _ in palette]
+    else:
+        palette = PREFERENCE_STATES
+        states = [0 if r.get("confirmed") else 1 for r in items]
+        names = [n for n, _ in palette]
     fig = go.Figure()
 
     med, p95 = noise["median_abs_delta"], noise["p95_abs_delta"]
@@ -527,7 +536,10 @@ def bias_bars(items: list[dict], noise: dict, *, signed: bool = False,
     _base(fig, height=height or max(260, 40 * len(items) + 110), showlegend=True,
           xtitle=xtitle or "how far the score moves, logits")
     fig.update_yaxes(tickfont=dict(size=12.5, color=INK))
-    span = max(abs(min(vals + [0])), abs(max(vals + [0])), p95) * 1.22
+    # An explicit xmax lets two charts shown side by side share a scale. Without it their bar
+    # lengths are not comparable even though both are in logits.
+    span = xmax if xmax is not None else \
+        max(abs(min(vals + [0])), abs(max(vals + [0])), p95) * 1.22
     fig.update_xaxes(range=[-span, span] if signed else [0, span])
     return fig
 
@@ -598,4 +610,38 @@ def attack_success(summary: dict, beam: dict | None) -> go.Figure:
           xtitle="bar set at this percentile of genuine answers to the same prompt",
           ytitle="share of attacks that clear the bar")
     fig.update_yaxes(showgrid=True, gridcolor=GRID, tickformat=".0%")
+    return fig
+
+
+def exploit_ranking(exploits: list[dict], baseline_asr: float) -> go.Figure:
+    """Only the attacks that beat a real answer, against the bar an unattacked answer already clears.
+
+    Ranked by success rate rather than by lift. Lift measures how far an affix moved the score;
+    success measures whether that was far enough to matter, and the two disagree because the
+    biggest lifts come from the answers that started lowest.
+    """
+    rows = sorted(exploits, key=lambda e: (e["asr"].get("p50") or 0))
+    labels = [(e["label"][:44] + "…") if len(e["label"]) > 44 else e["label"] for e in rows]
+    vals = [e["asr"].get("p50") or 0 for e in rows]
+    fig = go.Figure()
+    if baseline_asr > 0:
+        fig.add_vline(x=baseline_asr, line=dict(color="#8a8a85", width=2, dash="dot"))
+        fig.add_annotation(x=baseline_asr, y=len(rows) - 0.4,
+                           text="the bad answer already clears this unattacked",
+                           showarrow=False, xanchor="left", xshift=6,
+                           font=dict(size=11, color=INK2))
+    fig.add_trace(go.Bar(
+        y=labels, x=vals, orientation="h", width=0.6, showlegend=False,
+        marker=dict(color=[SERIES[1] if e["kind"] == "stacked attack" else STATUS["critical"]
+                           for e in rows]),
+        text=[f"{v:.0%}" for v in vals], textposition="outside",
+        textfont=dict(size=12, color=INK),
+        customdata=[[e["kind"], e["lift"], len(e["examples"])] for e in rows],
+        hovertemplate="<b>%{y}</b><br>%{customdata[0]}<br>beats a real answer %{x:.0%} of the time"
+                      "<br>lift %{customdata[1]:+.2f} logits<extra></extra>"))
+    fig.update_traces(marker_cornerradius=4)
+    _base(fig, height=max(240, 44 * len(rows) + 110),
+          xtitle="share of prompts where the attacked bad answer beats a median genuine answer")
+    fig.update_xaxes(tickformat=".0%", range=[0, max(vals + [baseline_asr]) * 1.45 + 0.02])
+    fig.update_yaxes(tickfont=dict(size=12.5, color=INK))
     return fig

@@ -186,6 +186,10 @@ def run(
             seed=seed, progress=progress,
         )
 
+    summary["top_exploits"] = _top_exploits(
+        rows, summary, corpus, generic, affixes, ref_thresholds, ref_ok, baseline_asr, beam
+    )
+
     return {
         "rows": rows,
         "summary": summary,
@@ -198,6 +202,103 @@ def run(
         "affix_library_version": attack["version"],
         "asr_percentiles": list(ASR_PERCENTILES),
     }
+
+
+def _top_exploits(rows, summary, corpus, generic, affixes, ref_thresholds, ref_ok,
+                  baseline_asr, beam, *, max_attacks: int = 6, max_examples: int = 3) -> list[dict]:
+    """The attacks that actually worked, with the text that did it.
+
+    "Worked" means the attacked bad answer outscored the median genuine answer to the same prompt
+    more often than the unmodified bad answer already did. Lift alone is not enough: an affix can
+    add several logits and still leave the answer far below anything a real model would produce.
+
+    The attacked text is rebuilt here rather than stored per row, because storing it for every
+    affix, base and position would multiply the results file several times over for text that is
+    a deterministic function of three ids.
+    """
+    by_id = {a["id"]: a for a in affixes}
+    q_by_id = {q["id"]: q for q in corpus["questions"]}
+    floor = baseline_asr.get("p50") or 0.0
+    out = []
+
+    # Prefer illustrating with the most obviously worthless base first. A refusal that beats a real
+    # answer makes the point far better than a merely mediocre one, and showing three examples of
+    # the same base type wastes the space.
+    egregious = {"nonanswer": 0, "rude": 1, "offtopic": 2, "wrong": 3, "poor": 4}
+
+    def pick(hits, limit):
+        chosen, seen = [], set()
+        for r in sorted(hits, key=lambda r: (egregious.get(r["base_type"], 9), -r["score"])):
+            if r["base_type"] not in seen:
+                chosen.append(r)
+                seen.add(r["base_type"])
+            if len(chosen) >= limit:
+                return chosen
+        for r in sorted(hits, key=lambda r: -r["score"]):
+            if r not in chosen:
+                chosen.append(r)
+            if len(chosen) >= limit:
+                break
+        return chosen
+
+    for entry in summary["affixes"]:
+        if entry["is_control"]:
+            continue
+        asr50 = entry["asr"].get("p50")
+        if asr50 is None or asr50 <= floor:
+            continue
+        hits = [r for r in rows
+                if r["affix_id"] == entry["affix_id"] and r["position"] == entry["position"]
+                and r["split"] == "test" and r.get("beats_p50")]
+        examples = []
+        for r in pick(hits, max_examples):
+            q = q_by_id[r["question_id"]]
+            base = {b["id"]: b for b in bases_for(q, generic)}[r["base_id"]]
+            examples.append({
+                "question": q["question"],
+                "base_type": r["base_type"],
+                "base_text": base["text"],
+                "base_score": r["base_score"],
+                "attacked_text": apply_affix(base["text"], by_id[entry["affix_id"]]["text"],
+                                             r["position"], q["neutral_answer"]),
+                "attacked_score": r["score"],
+                "genuine_answer": q["neutral_answer"],
+                "median_genuine_score": ref_thresholds[r["question_id"]][50],
+            })
+        out.append({
+            "label": f"{entry['affix_id']} as a {entry['position']}",
+            "kind": "single affix", "affix_id": entry["affix_id"],
+            "position": entry["position"], "family": entry["family"],
+            "lift": entry["mean_lift"], "asr": entry["asr"], "examples": examples,
+        })
+
+    if beam and (beam.get("heldout_asr") or {}).get("p50") is not None \
+            and beam["heldout_asr"]["p50"] > floor:
+        examples = []
+        for ex in beam.get("best_scoring") or beam["top_examples"]:
+            if ex["question_id"] not in ref_ok:
+                continue
+            q = q_by_id[ex["question_id"]]
+            if ex["attacked_score"] <= ref_thresholds[ex["question_id"]][50]:
+                continue
+            examples.append({
+                "question": q["question"], "base_type": ex["base_type"],
+                "base_text": ex["base_text"], "base_score": ex["base_score"],
+                "attacked_text": ex["attacked_text"], "attacked_score": ex["attacked_score"],
+                "genuine_answer": q["neutral_answer"],
+                "median_genuine_score": ref_thresholds[ex["question_id"]][50],
+            })
+            if len(examples) >= max_examples:
+                break
+        out.append({
+            "label": " + ".join(a for a, _ in beam["stack"]),
+            "kind": "stacked attack", "affix_id": None, "position": "stacked",
+            "family": "search", "lift": beam["heldout_mean_lift"],
+            "asr": beam["heldout_asr"], "examples": examples,
+        })
+
+    out.sort(key=lambda e: (-(e["asr"].get("p50") or 0), -e["lift"]))
+    return out[:max_attacks]
 
 
 def _summarise(rows, affixes, refs, ref_ok, *, n_boot, seed, noise_floor):
@@ -354,22 +455,24 @@ def _beam_search(scorer, dev, test, affixes, generic, refs, ref_ok, ref_threshol
             for i in range(len(meta)) if meta[i][0] in ref_ok
         ]
         asr[f"p{p}"] = float(np.mean(hits)) if hits else None
-    examples = sorted(
-        [
-            {
-                "question_id": meta[i][0],
-                "base_id": meta[i][1],
-                "base_type": meta[i][2],
-                "base_text": meta[i][3],
-                "attacked_text": pairs[i][1],
-                "base_score": float(base_scores[i]),
-                "attacked_score": float(attacked[i]),
-                "lift": float(lifts[i]),
-            }
-            for i in range(len(meta))
-        ],
-        key=lambda e: -e["lift"],
-    )
+    rows_out = [
+        {
+            "question_id": meta[i][0],
+            "base_id": meta[i][1],
+            "base_type": meta[i][2],
+            "base_text": meta[i][3],
+            "attacked_text": pairs[i][1],
+            "base_score": float(base_scores[i]),
+            "attacked_score": float(attacked[i]),
+            "lift": float(lifts[i]),
+        }
+        for i in range(len(meta))
+    ]
+    examples = sorted(rows_out, key=lambda e: -e["lift"])
+    # Biggest lift and highest final score are different questions. Lift is largest where the base
+    # started lowest, which is precisely where the attacked answer still ends up far below any real
+    # answer. Picking exploit examples needs the score ranking, not the lift ranking.
+    best_scoring = sorted(rows_out, key=lambda e: -e["attacked_score"])[:25]
     return {
         # The dev number is what the search optimised, so it is kept only to show how much of it
         # fails to survive on prompts the search never saw.
@@ -384,6 +487,7 @@ def _beam_search(scorer, dev, test, affixes, generic, refs, ref_ok, ref_threshol
         "heldout_asr": asr,
         "n_heldout": len(meta),
         "top_examples": examples[:10],
+        "best_scoring": best_scoring,
     }
 
 
