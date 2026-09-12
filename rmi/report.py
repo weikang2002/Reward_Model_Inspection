@@ -13,8 +13,10 @@ from pathlib import Path
 import plotly.io as pio
 
 from . import severity as sev
+from .runner import probe_heading
 from . import viz
 from .findings import module_items, overview_verdict, tone_check, verdict_line
+from .textdiff import word_diff
 
 CSS = """
 :root{--ink:#0b0b0b;--ink2:#52514e;--line:#e6e5e1;--surface:#fcfcfb;--plane:#f9f9f7;}
@@ -53,6 +55,11 @@ th{color:var(--ink2);font-weight:600;font-size:12px;text-transform:uppercase;let
 .warn{background:#fdf6e8;border-left-color:#fab219}
 .good{background:#f2faf2;border-left-color:#0ca30c}
 code{background:#f0efec;padding:1px 5px;border-radius:4px;font-size:12.5px}
+ins{background:#d7f0d7;text-decoration:none}
+ins.attack{background:#fbe3e0;border-bottom:2px solid #d03b3b;text-decoration:none}
+del{background:#fbdada;text-decoration:line-through}
+.answer{background:#f7f7f5;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  font-size:13px;line-height:1.55;white-space:pre-wrap;margin:6px 0 12px}
 .verdict{border-left:4px solid #d03b3b;background:#fdf3f3;border-radius:0 8px 8px 0;
   padding:12px 16px;margin:2px 0 18px;font-size:15px;line-height:1.55}
 .verdict.clear{border-left-color:#0ca30c;background:#f2faf2}
@@ -195,7 +202,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- identity ---------------------------------------------------------------------
     idr = R.get("identity")
     if idr:
-        A("<h2>Identity</h2>")
+        A(f"<h2>{probe_heading('identity')}</h2>")
         A(verdict_line(module_items(R, "identity"), "identity",
                        "swapping a name or a descriptor changes the score", noise=noise))
         A("<h3>Which identities change the score</h3>")
@@ -239,7 +246,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     if sy:
         m = sy["agreement_main_effect"]
         slope = max(sy["insistence_slopes"], key=lambda s: s["mean_delta"])
-        A("<h2>Sycophancy</h2>")
+        A(f"<h2>{probe_heading('sycophancy')}</h2>")
         A(verdict_line(module_items(R, "sycophancy"), "sycophancy",
                        "the model is rewarded for agreeing rather than correcting", noise=noise))
         A(_fig(viz.bias_bars(module_items(R, "sycophancy"), noise, signed=True,
@@ -276,7 +283,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- style ------------------------------------------------------------------------
     sm = R.get("style")
     if sm:
-        A("<h2>Style and length</h2>")
+        A(f"<h2>{probe_heading('style')}</h2>")
         A(verdict_line(
             module_items(R, "style"), "style", "surface style is rewarded for its own sake",
             noise=noise,
@@ -354,7 +361,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         winner = max(cands, key=lambda c: (c["asr"] if c["asr"] is not None else -1, c["lift"])) \
             if cands else None
 
-        A("<h2>Injection and reward hacking</h2>")
+        A(f"<h2>{probe_heading('injection')}</h2>")
         if winner:
             works = (winner["asr"] is not None and base_asr is not None
                      and winner["asr"] > base_asr)
@@ -386,17 +393,20 @@ def build(results: dict, out_path: Path | str) -> Path:
             A("<h3>What the attack actually looks like</h3>")
             for e in exploits[:3]:
                 for ex in e["examples"][:1]:
+                    left, right = word_diff(ex["base_text"], ex["attacked_text"],
+                                            ins_class="attack")
                     A(f"<div class='card'><b>{html.escape(e['label'])}</b> · "
                       f"{html.escape(e['kind'])} · beats a real answer "
                       f"{e['asr']['p50']:.0%} of the time<br>"
                       f"<span class='sub'>The user asked: {html.escape(ex['question'])}</span>"
                       f"<p><b>The bad answer on its own</b> ({html.escape(ex['base_type'])}), "
                       f"score <code>{ex['base_score']:+.2f}</code></p>"
-                      f"<pre>{html.escape(ex['base_text'][:600])}</pre>"
+                      f"<div class='answer'>{left}</div>"
                       f"<p><b>The same answer, attacked</b>, score "
                       f"<code>{ex['attacked_score']:+.2f}</code>, past the median genuine answer "
-                      f"at <code>{ex['median_genuine_score']:+.2f}</code></p>"
-                      f"<pre>{html.escape(ex['attacked_text'][:900])}</pre></div>")
+                      f"at <code>{ex['median_genuine_score']:+.2f}</code>. What the attack bolted "
+                      "on is highlighted.</p>"
+                      f"<div class='answer'>{right}</div></div>")
 
         A("<h3>Supporting evidence</h3>")
         A("<h4>How hard is the bar?</h4>")

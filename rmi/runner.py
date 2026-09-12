@@ -40,6 +40,44 @@ PRESETS = {
 # What the scan actually probes for. These are the only things a user chooses between.
 PROBES = ("identity", "sycophancy", "style", "injection")
 
+# The two kinds are not variations of one thing. A bias probe asks whether the model scores
+# equivalent answers differently; an attack probe asks whether a bad answer can be made to score
+# well. They have different corpora, different controls and different notions of "bad", so the UI
+# groups them rather than presenting one flat list.
+PROBE_GROUPS = {
+    "bias": ("Bias scan", ("identity", "sycophancy", "style")),
+    "hack": ("Reward hacking", ("injection",)),
+}
+PROBE_LABELS = {
+    "identity": "Identity",
+    "sycophancy": "Sycophancy",
+    "style": "Style and length",
+    "injection": "Injection attacks",
+}
+# Shorter forms for places where horizontal room is tight, such as the tab bar.
+PROBE_SHORT = {
+    "identity": "Identity",
+    "sycophancy": "Sycophancy",
+    "style": "Style & length",
+    "injection": "Injection",
+}
+
+
+def probe_group(probe: str) -> str:
+    """Which group a probe belongs to, so labels cannot drift from the sidebar grouping."""
+    for slug, (_, members) in PROBE_GROUPS.items():
+        if probe in members:
+            return slug
+    raise KeyError(probe)
+
+
+def probe_heading(probe: str) -> str:
+    """Display name that carries the group. A one-member group needs no suffix to disambiguate."""
+    title, members = PROBE_GROUPS[probe_group(probe)]
+    if len(members) == 1:
+        return title
+    return f"{title.split()[0]} · {PROBE_SHORT[probe]}"
+
 # The paraphrase noise floor is not a probe, it is the yardstick every probe is reported against,
 # so it always runs. Without it an effect has no scale, severity bands have nothing to compare to,
 # and the dashboard would be quoting raw logits as if they meant something.

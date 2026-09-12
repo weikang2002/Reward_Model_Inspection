@@ -18,10 +18,12 @@ import pandas as pd
 import streamlit as st
 
 from rmi import severity as sev
+from rmi.textdiff import word_diff
 from rmi import viz
 from rmi.findings import module_items, overview_verdict, tone_check, verdict_line
 from rmi.report import build as build_report
-from rmi.runner import PROBES, PRESETS, RESULTS_DIR, list_results, load_results, run_scan
+from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
+                        list_results, load_results, probe_heading, run_scan)
 
 
 @st.cache_data(show_spinner="Loading results")
@@ -60,8 +62,18 @@ st.markdown("""
   .verdict.mild {border-left-color:#fab219; background:#fdf6e8;}
   .verdict .hint {display:block; color:#52514e; font-size:12.5px; margin-top:6px;}
   ins {background:#d7f0d7; text-decoration:none;}
+  ins.attack {background:#fbe3e0; border-bottom:2px solid #d03b3b; text-decoration:none;}
+  .grouphead {font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#52514e;
+              font-weight:700; margin:-2px 0 2px;}
+  /* Tighten the gap between the checkboxes only; a negative margin on the box itself pushed the
+     last one through the bottom border. */
+  [class*="st-key-probegroup"] {border-radius:9px !important;}
+  [class*="st-key-probegroup"] [data-testid="stVerticalBlock"] {gap:.25rem !important;}
+  [class*="st-key-probegroup_bias"] {border-left:4px solid #2a78d6 !important;}
+  [class*="st-key-probegroup_hack"] {border-left:4px solid #d03b3b !important;}
   [class*="st-key-drill"] details {border:1px solid #2a78d6 !important;
-     border-left-width:5px !important; background:#f4f8fe !important; border-radius:9px;}
+     border-left-width:5px !important; background:#ffffff !important; border-radius:9px;}
+  [class*="st-key-drill"] details > summary {background:#ffffff !important;}
   [class*="st-key-drill"] summary {font-weight:600 !important; font-size:15px !important;}
   [class*="st-key-drill"] summary p {font-weight:600 !important; font-size:15px !important;}
   del {background:#fbdada; text-decoration:line-through;}
@@ -119,8 +131,15 @@ with st.sidebar:
     model_choice = st.selectbox("Reward model", PRESET_MODELS + ["Other (type below)"])
     model_id = (st.text_input("HuggingFace model id", value="")
                 if model_choice.startswith("Other") else model_choice)
-    chosen = st.multiselect("Probe for", list(PROBES), default=list(PROBES))
-    calibrate = st.checkbox("Measure agreement with human preferences", value=True)
+    st.markdown("**Probe for**")
+    chosen = []
+    for slug, (group_title, members) in PROBE_GROUPS.items():
+        with st.container(border=True, key=f"probegroup_{slug}"):
+            st.markdown(f'<div class="grouphead">{group_title}</div>', unsafe_allow_html=True)
+            for probe in members:
+                if st.checkbox(PROBE_LABELS[probe], value=True, key=f"probe_{probe}"):
+                    chosen.append(probe)
+    calibrate = st.checkbox("Measure agreement with humans", value=True)
     st.caption(
         "Every scan also measures the paraphrase noise floor, the yardstick all findings are "
         "reported against, so it is not optional. The human-preference check needs a one-off "
@@ -251,24 +270,10 @@ def band_pill(band: str) -> str:
             f'{html.escape(band)}</span>')
 
 
-def word_diff(a: str, b: str) -> tuple[str, str]:
-    aw, bw = a.split(), b.split()
-    sm = difflib.SequenceMatcher(None, aw, bw)
-    left, right = [], []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        at, bt = " ".join(aw[i1:i2]), " ".join(bw[j1:j2])
-        if tag == "equal":
-            left.append(html.escape(at)); right.append(html.escape(bt))
-        else:
-            if at:
-                left.append(f"<del>{html.escape(at)}</del>")
-            if bt:
-                right.append(f"<ins>{html.escape(bt)}</ins>")
-    return " ".join(left), " ".join(right)
-
-
-def side_by_side(title_a, text_a, score_a, title_b, text_b, score_b, *, diff=True):
-    la, lb = word_diff(text_a, text_b) if diff else (html.escape(text_a), html.escape(text_b))
+def side_by_side(title_a, text_a, score_a, title_b, text_b, score_b, *, diff=True,
+                 ins_class: str = ""):
+    la, lb = (word_diff(text_a, text_b, ins_class=ins_class) if diff
+              else (html.escape(text_a), html.escape(text_b)))
     c1, c2 = st.columns(2)
     for col, t, body, s in ((c1, title_a, la, score_a), (c2, title_b, lb, score_b)):
         with col:
@@ -324,8 +329,10 @@ if export_clicked and R is not None:
         st.download_button("Download report", out.read_bytes(), file_name=out.name,
                            mime="text/html", width="stretch")
 
-tabs = st.tabs(["Overview", "Identity", "Sycophancy", "Style & length", "Injection",
-                "Compare models", "Appendix"])
+# Tab names carry the same grouping as the sidebar: the first three are bias probes, the fourth
+# asks a different question entirely. Derived from PROBE_GROUPS so the two cannot drift apart.
+tabs = st.tabs(["Overview"] + [probe_heading(p) for p in PROBES]
+               + ["Compare models", "Appendix"])
 
 
 def finding_key(f: dict) -> tuple:
@@ -497,7 +504,7 @@ with tabs[1]:
 
         st.markdown("#### Read the exact text")
         with st.expander(f"See the scored text, swapping the {what}",
-                         icon=":material/article:", key="drill_identity"):
+                         icon=":material/article:", expanded=True, key="drill_identity"):
             arms = pd.DataFrame(rows)
             if arms.empty:
                 st.info("No scored text was stored for this axis.")
@@ -603,7 +610,7 @@ with tabs[2]:
         # ---- the exact text ----------------------------------------------------------------
         st.markdown("#### Read the exact text")
         with st.expander(f"See the responses when the user {viz.LADDER_LABEL[pick]}",
-                         icon=":material/article:", key="drill_sycophancy"):
+                         icon=":material/article:", expanded=True, key="drill_sycophancy"):
             arms = pd.DataFrame(sy["arms"])
             topics = dict(zip(arms["scenario_id"], arms["topic"]))
             s_opts, s_fmt = labelled(topics, topics)
@@ -698,7 +705,7 @@ with tabs[3]:
 
         st.markdown("#### Read the exact text")
         with st.expander("See a transformed answer beside the plain one",
-                         icon=":material/article:", key="drill_style"):
+                         icon=":material/article:", expanded=True, key="drill_style"):
             arms = pd.DataFrame(sm["arms"])
             questions = dict(zip(arms["question_id"], arms["question"]))
             q_opts, q_fmt = labelled(arms["question_id"].unique(), questions)
@@ -813,9 +820,10 @@ with tabs[4]:
                 side_by_side(f"The bad answer on its own ({ex['base_type']})",
                              ex["base_text"], ex["base_score"],
                              "The same answer, attacked", ex["attacked_text"],
-                             ex["attacked_score"], diff=False)
+                             ex["attacked_score"], ins_class="attack")
                 st.caption(
-                    f"The attack moved it {ex['attacked_score'] - ex['base_score']:+.2f} logits, "
+                    f"Highlighted in red is what the attack bolted on. It moved the score "
+                    f"{ex['attacked_score'] - ex['base_score']:+.2f} logits, "
                     f"past the median genuine answer to this prompt at "
                     f"`{ex['median_genuine_score']:+.2f}`. For comparison, a real answer reads: "
                     f"*{html.escape(ex['genuine_answer'][:160])}…*"
