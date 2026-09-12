@@ -37,7 +37,130 @@ from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTok
 PROMPT_FORMAT = "bare"  # tokenizer(question, answer), no turn markers added
 DEFAULT_MAX_LENGTH = 512
 
+# This tool is meant to run on a laptop, on CPU or Apple Silicon. A reward model that does not fit
+# comfortably is not merely slow: CPU scoring is roughly 25x slower than MPS, which turns a
+# few-minute scan into most of an hour, and the download itself can fill a disk.
+MAX_DOWNLOAD_BYTES = 2 * 1024**3
+
+# Weight files, in the order transformers prefers them. Only one format is ever fetched, so
+# summing every weight file in a repo overstates the download, sometimes badly.
+_WEIGHT_FORMATS = (
+    ("safetensors", (".safetensors",)),
+    ("pytorch", ("pytorch_model.bin", ".bin")),
+    ("tensorflow", (".h5",)),
+    ("flax", (".msgpack",)),
+)
+
+# Training state that lives in many published repos and that `from_pretrained` never downloads.
+# OpenAssistant's base reward model ships a 1.48 GB optimizer.pt beside a 0.74 GB checkpoint, so
+# counting it would block a model that actually costs well under a gigabyte to fetch.
+_TRAINING_ONLY = {
+    "optimizer.pt", "scheduler.pt", "rng_state.pth", "trainer_state.json", "training_args.bin",
+}
+
+# The small files that always come along: config, tokenizer, vocabulary. Anything else left over
+# is an artifact for some other runtime (ONNX exports, rust_model.ot, TFLite) that a PyTorch load
+# ignores. gpt2 carries 2.7 GB of those beside a 0.55 GB checkpoint.
+_AUX_SUFFIXES = (".json", ".txt", ".model", ".py", ".vocab", ".merges")
+
 Pair = tuple[str, str]
+
+
+class ModelTooLargeError(RuntimeError):
+    """Raised instead of starting a download that this machine should not be asked to make."""
+
+
+def _classify(filename: str) -> str | None:
+    """Which weight format a repo file belongs to, or None if it is not a weight file."""
+    base = filename.rsplit("/", 1)[-1]
+    if base in _TRAINING_ONLY:
+        return "training"
+    for label, patterns in _WEIGHT_FORMATS:
+        if any(base.startswith(p) if not p.startswith(".") else base.endswith(p) for p in patterns):
+            return label
+    return None
+
+
+def download_size(model_id: str, revision: str | None = None) -> int | None:
+    """Bytes ``from_pretrained`` would fetch for this repo, or None if it cannot be determined.
+
+    None means "no answer", not "nothing to download": the repo may be private, gated, or the
+    machine offline. Callers treat it as unknown rather than as zero.
+    """
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(model_id, revision=revision, files_metadata=True)
+    except Exception:
+        return None
+
+    by_format: dict[str, int] = {}
+    aux = 0
+    for sibling in info.siblings or []:
+        name = sibling.rfilename
+        # Only the repo root: from_pretrained does not descend into subfolders unless told to,
+        # and an onnx/ directory can easily outweigh the checkpoint itself.
+        if "/" in name:
+            continue
+        size = getattr(sibling, "size", None) or 0
+        kind = _classify(name)
+        if kind == "training":
+            continue
+        if kind is None:
+            if name.endswith(_AUX_SUFFIXES):
+                aux += size
+            continue  # an artifact for some other runtime; a PyTorch load never fetches it
+        by_format[kind] = by_format.get(kind, 0) + size
+    if not by_format:
+        return aux or None
+    for label, _ in _WEIGHT_FORMATS:  # transformers takes the first format it finds
+        if by_format.get(label):
+            return by_format[label] + aux
+    return max(by_format.values()) + aux
+
+
+def is_weights_cached(model_id: str, revision: str | None = None) -> bool:
+    """Whether the weights are already on disk, in which case nothing will be downloaded."""
+    if Path(model_id).is_dir():
+        return True
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return False
+    for filename in ("model.safetensors", "pytorch_model.bin",
+                     "model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        try:
+            hit = try_to_load_from_cache(model_id, filename, revision=revision)
+        except Exception:
+            continue
+        if isinstance(hit, str):
+            return True
+    return False
+
+
+def check_download_size(model_id: str, *, revision: str | None = None,
+                        limit: int = MAX_DOWNLOAD_BYTES, allow_large: bool = False) -> int | None:
+    """Refuse to start a download larger than ``limit``. Returns the size when it is known.
+
+    An already-cached model is never blocked, however large it is: re-running a scan you have
+    already paid for must keep working. Only a fresh download is gated.
+    """
+    if allow_large or is_weights_cached(model_id, revision):
+        return None
+    size = download_size(model_id, revision)
+    if size is None:
+        # Undeterminable, usually because the machine is offline or the repo is gated. Proceeding
+        # gives a clear network or permission error; blocking here would only obscure it.
+        return None
+    if size > limit:
+        raise ModelTooLargeError(
+            f"{model_id} would download {size / 1024**3:.1f} GB, over the "
+            f"{limit / 1024**3:.0f} GB limit for this tool. It is built to run on a laptop, on "
+            "CPU or Apple Silicon, where a model this size is slow enough to make a scan "
+            "impractical and large enough to be a problem on disk. Pick a smaller reward model, "
+            "or pass allow_large_download=True if you are sure this machine can take it."
+        )
+    return size
 
 
 @dataclass(frozen=True)
@@ -149,12 +272,19 @@ class RewardModel:
         batch_size: int = 16,
         split_special_tokens: bool = False,
         progress: bool = False,
+        allow_large_download: bool = False,
     ):
         self.model_id = model_id
         self.max_length = max_length
         self.batch_size = batch_size
         self.split_special_tokens = split_special_tokens
         self.progress = progress
+
+        # Before anything is fetched. AutoConfig alone would already pull the repo's small files,
+        # but the weights are what matter and this runs first so the refusal is immediate.
+        self.download_bytes = check_download_size(
+            model_id, allow_large=allow_large_download
+        )
 
         config = AutoConfig.from_pretrained(model_id)
         n_labels = getattr(config, "num_labels", None)

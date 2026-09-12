@@ -4,7 +4,6 @@ These were the largest untested surface. None of it raises on a wrong number, so
 is a chart that quietly plots the wrong field, or a report that ships missing a section.
 """
 
-import json
 import re
 
 import pytest

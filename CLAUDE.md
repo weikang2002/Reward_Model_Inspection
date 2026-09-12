@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 38 tests, ~11s
+uv run pytest -q                           # 134 tests, ~25s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -35,11 +35,18 @@ attacks. Two checkpoints are the working targets and both are already in the HF 
 
 These reward models move about **0.7 logits when an answer is reworded without changing its
 meaning**, against a good-vs-poor answer gap of roughly 3. So the paraphrase noise floor is
-measured first, and **every effect in the product is reported as a percentile of it**. An effect
-below that floor is rephrasing, not bias.
+measured first, and every effect is judged against it.
+
+The comparison is at the effect's **own sample size**, not per comparison. Wording perturbs a
+single head-to-head far harder than any bias does, but it points in an arbitrary direction and
+cancels as 1/sqrt(n), while a bias points the same way every time. A policy gradient accumulates
+over thousands of comparisons, so each finding is measured against
+`1.645 * wording_sd / sqrt(n_items)` and bands are multiples of that bar. The floor itself is
+measured **rewrite against rewrite**: rewrites score systematically lower than their source, and
+folding that constant in inflates the bar with something that never shrinks.
 
 This is why `noise_floor` is not a user-selectable probe. If you make it optional or skip it, every
-finding loses its `noise_percentile`, severity bands collapse to "Unknown", and all four bias tabs
+finding loses its `systematic_bar`, severity bands collapse to "Unknown", and all four bias tabs
 stop rendering. `rmi/runner.py` encodes the split deliberately:
 
 - `PROBES` — the four things a user chooses between (identity, sycophancy, style, injection)
@@ -66,7 +73,7 @@ never import Streamlit and never format text for display.
 
 **`rmi/runner.py`** orchestrates, applies multiplicity correction per module, then flattens every
 module into one ranked `findings` list. Each finding carries `category`, `effect`,
-`noise_percentile`, `confirmed`, `band`, and **`valence`** (`vulnerability` / `healthy` /
+`systematic_bar`, `n_items`, `confirmed`, `band`, and **`valence`** (`vulnerability` / `healthy` /
 `informational`). Valence matters: without it the ranked list puts "correctly penalises junk" at
 the top of a vulnerability report, and category risk scores get driven by the model behaving well.
 
@@ -82,13 +89,15 @@ is called in `app.py`, `rmi/report.py` *and* `runner.py`. Changing a threshold t
 effect on old result files with no rescan. But **finding titles are baked in at scan time**, so
 editing a title string in `rank_findings` does require re-running scans.
 
-**`MATERIALITY_PERCENTILE` in `rmi/severity.py` is the single source of truth** for "big enough to
-matter", used by both the category tiles and each tab's verdict line. Two different bars there once
-let a finding be material on the overview and immaterial on its own tab.
+**`MATERIALITY_RATIO` in `rmi/severity.py` is the single source of truth** for "big enough to
+matter", and `severity.is_material` is the only function that decides it. Two different bars once
+let a finding be material on the overview and immaterial on its own tab, and a second copy of the
+rule on each finding disagreed with this one whenever the floor was degenerate.
 
 **Severity is worst-case, not a quantile.** One working exploit is not mitigated by four that fail,
 and with a handful of probes a 90th percentile lands on the second largest and hides the finding
-the reader needs.
+the reader needs. A banner and its category pill must take their colour from the same `band()`
+call, or the same effect shows as a red alarm beside an amber chip.
 
 **Never resample rows.** The same questions and templates recur across contrasts, so every interval
 resamples whole clusters (`cluster_bootstrap_ci`, `wild_cluster_bootstrap_p` in
@@ -129,6 +138,23 @@ Confirmed by probing, not assumed. Several overturned an obvious design:
 - Scoring is bit-identical across runs, which is why the score cache is never stale. Results JSON
   *does* go stale when analysis code changes; that asymmetry is why the sidebar's clear-results
   control deliberately leaves `.rmi_cache/` alone.
+
+## The download gate
+
+`MAX_DOWNLOAD_BYTES` in `rmi/scoring.py` refuses a fresh download over 2 GB, because this runs on
+a laptop where CPU scoring is ~25x slower than MPS. Two things about the estimate are easy to get
+wrong and both are pinned by tests:
+
+- **Published repos carry a lot `from_pretrained` never fetches.** The base reward model ships a
+  1.48 GB `optimizer.pt` beside a 0.74 GB checkpoint, and gpt2 carries 2 GB of ONNX exports beside
+  a 0.55 GB one. Summing every large file refuses models that cost well under a gigabyte.
+- **Only one weight format is fetched.** A repo publishing torch, TF and flax copies still
+  downloads one of them.
+
+An already-cached model is never blocked however large it is, so re-running a scan you have
+already paid for keeps working; only a fresh download is gated. An undeterminable size proceeds
+rather than blocking, since the usual cause is being offline and the download then fails with a
+clearer error.
 
 ## Verification that matters
 

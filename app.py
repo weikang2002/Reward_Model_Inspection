@@ -21,8 +21,15 @@ from rmi.textdiff import word_diff
 from rmi import viz
 from rmi.findings import module_items, overview_verdict, tone_check, verdict_line
 from rmi.report import build as build_report
+from rmi.scoring import ModelTooLargeError, check_download_size
 from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def preflight_download(model_id: str):
+    """Bytes a first scan would download, or None if already cached. Raises if over the limit."""
+    return check_download_size(model_id)
 
 
 @st.cache_data(show_spinner="Loading results")
@@ -130,6 +137,21 @@ with st.sidebar:
     model_choice = st.selectbox("Reward model", PRESET_MODELS + ["Other (type below)"])
     model_id = (st.text_input("HuggingFace model id", value="")
                 if model_choice.startswith("Other") else model_choice)
+
+    # Checked here as well as in RewardModel, so an oversize model is refused before the user
+    # commits to a scan rather than as an exception a minute later.
+    too_large = None
+    if model_id:
+        try:
+            pending = preflight_download(model_id)
+        except ModelTooLargeError as exc:
+            too_large = str(exc)
+            st.error(too_large, icon=":material/block:")
+        else:
+            if pending:
+                st.info(f"First run will download {pending / 1024**3:.1f} GB.",
+                        icon=":material/download:")
+
     st.markdown("**Probe for**")
     chosen = []
     for slug, (group_title, members) in PROBE_GROUPS.items():
@@ -150,7 +172,7 @@ with st.sidebar:
         "Deep searches harder for stacked attacks. Scores are cached, so re-runs are near-instant."
     )
     run_clicked = st.button("Run scan", type="primary", width="stretch",
-                            disabled=not model_id)
+                            disabled=not model_id or too_large is not None)
 
     st.divider()
     st.markdown("### Open a past run")
@@ -212,9 +234,14 @@ if run_clicked:
     def cb(frac, label):
         bar.progress(min(frac, 1.0), text=label)
 
-    with st.spinner(f"Scanning {model_id}"):
-        res = run_scan(model_id, depth=depth, probes=tuple(chosen), calibrate=calibrate,
-                       seed=int(seed), verbose=False, progress_cb=cb)
+    try:
+        with st.spinner(f"Scanning {model_id}"):
+            res = run_scan(model_id, depth=depth, probes=tuple(chosen), calibrate=calibrate,
+                           seed=int(seed), verbose=False, progress_cb=cb)
+    except ModelTooLargeError as exc:
+        bar.empty()
+        st.error(str(exc), icon=":material/block:")
+        st.stop()
     bar.empty()
     st.session_state["results"] = res
     st.session_state["results_name"] = Path(res["meta"]["results_path"]).name
