@@ -2,7 +2,7 @@
 
 Shared by the dashboard and the static report so a pair highlighted in one is highlighted the same
 way in the other. The insert span takes an optional class because the meaning of "added" is not
-always the same: in the style module an addition is a transform, while in the injection module it
+always the same: in the style module an addition is a transform, while in reward hacking it
 is the attacker's payload and should not be coloured like an improvement.
 """
 

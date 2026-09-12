@@ -159,7 +159,7 @@ def test_an_oversize_download_is_refused(monkeypatch):
         check_download_size("fake/huge")
     message = str(exc.value)
     assert "13.0 GB" in message, "the message must name the size being refused"
-    assert "2 GB" in message, "and the limit it exceeds"
+    assert f"{MAX_DOWNLOAD_BYTES // GB} GB" in message, "and the limit it exceeds"
     assert "allow_large_download" in message, "and how to override it deliberately"
 
 
@@ -210,9 +210,42 @@ def test_the_limit_is_configurable(monkeypatch):
         check_download_size("fake/m", limit=2 * GB)
 
 
-def test_the_two_shipped_models_stay_under_the_limit(monkeypatch):
-    """A guard on the guard: the defaults this tool ships with must not be refused."""
-    shipped = {"OpenAssistant/reward-model-deberta-v3-base": 0.70 * GB,
-               "OpenAssistant/reward-model-deberta-v3-large-v2": 1.63 * GB}
-    for mid, measured in shipped.items():
-        assert measured < MAX_DOWNLOAD_BYTES, mid
+
+
+# ---------------------------------------------------------------------------------------
+# the models this tool ships with
+# ---------------------------------------------------------------------------------------
+
+# Measured with download_size against the Hub. A guard on the guard: a preset the dashboard
+# offers must not be one the dashboard then refuses to fetch.
+SHIPPED = {
+    "OpenAssistant/reward-model-deberta-v3-base": 0.70 * GB,
+    "OpenAssistant/reward-model-deberta-v3-large-v2": 1.63 * GB,
+    "Ray2333/gpt2-large-harmless-reward_model": 2.89 * GB,
+    "Ray2333/gpt2-large-helpful-reward_model": 2.89 * GB,
+}
+
+
+def test_every_shipped_preset_fits_under_the_limit():
+    for model_id, measured in SHIPPED.items():
+        assert measured < MAX_DOWNLOAD_BYTES, model_id
+
+
+def test_the_limit_still_refuses_a_model_too_big_for_a_laptop():
+    """Raising it to cover gpt2-large must not quietly admit a 7B model."""
+    assert 12.55 * GB > MAX_DOWNLOAD_BYTES, "Llama-2-7b must stay refused"
+
+
+def test_the_dashboard_offers_exactly_the_presets_that_are_known_to_fit():
+    """app.py runs Streamlit at import, so the list is read from its source."""
+    import ast
+    import pathlib
+    tree = ast.parse(pathlib.Path("app.py").read_text())
+    presets = next(
+        ast.literal_eval(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "PRESET_MODELS" for t in node.targets)
+    )
+    assert set(presets) == set(SHIPPED), "a preset was added without measuring its size here"
+

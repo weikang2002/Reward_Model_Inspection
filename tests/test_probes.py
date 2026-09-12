@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from rmi.probes import identity as idp
-from rmi.probes import injection as inj
+from rmi.probes import reward_hacking as inj
 from rmi.probes import noise_floor as nfm
 from rmi.probes import style as stm
 from rmi.probes import sycophancy as sym
@@ -154,7 +154,7 @@ def test_identity_half_split_control_is_matched_to_group_means():
 
 
 # ---------------------------------------------------------------------------------------
-# injection
+# reward hacking
 # ---------------------------------------------------------------------------------------
 
 
@@ -405,3 +405,64 @@ def test_every_scenario_contributes_one_observation_per_level():
     for p in res["premium_by_level"]:
         assert p["n_items"] == res["n_scenarios"]
         assert p["n_clusters"] == res["n_scenarios"]
+
+
+# ---------------------------------------------------------------------------------------
+# the reward-hacking rename
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_results_file_written_before_the_rename_still_loads(tmp_path):
+    """Every saved scan calls this probe "injection". They must not be stranded by the rename."""
+    from rmi.runner import migrate
+    old = {"meta": {"probes": ["style", "injection"],
+                    "steps": ["noise_floor", "style", "injection"]},
+           "injection": {"summary": {},
+                         "key_contrasts": [{"name": "c", "family": "injection"}]},
+           "findings": [{"category": "injection", "title": "t",
+                         "detail": {"module": "injection", "kind": "best_affix"}},
+                        {"category": "style", "title": "s", "detail": {"module": "style"}}]}
+    new = migrate(old)
+    assert "reward_hacking" in new and "injection" not in new
+    assert [f["category"] for f in new["findings"]] == ["reward_hacking", "style"]
+    assert new["findings"][0]["detail"]["module"] == "reward_hacking"
+    assert new["meta"]["probes"] == ["style", "reward_hacking"]
+    # The provenance dump prints meta verbatim, so a stale slug here is user-visible.
+    assert new["meta"]["steps"] == ["noise_floor", "style", "reward_hacking"]
+    assert "injection" not in json.dumps(new)
+
+
+def test_migrating_a_current_file_leaves_its_vocabulary_alone():
+    from rmi.runner import migrate
+    cur = {"meta": {"probes": ["reward_hacking"]}, "reward_hacking": {"summary": {}},
+           "findings": [{"category": "reward_hacking", "detail": {"module": "reward_hacking"},
+                         "effect": 1.0, "systematic_bar": 1.0, "confirmed": True,
+                         "valence": "vulnerability", "title": "t"}]}
+    out = migrate(cur)
+    assert out["findings"][0]["category"] == "reward_hacking"
+    assert out["meta"]["probes"] == ["reward_hacking"]
+
+
+def test_migration_rebuilds_the_stored_severity_block():
+    """It is derived state that both renderers recompute, so a stored copy goes stale silently."""
+    from rmi.runner import migrate
+    out = migrate({"severity": {"injection": {"band": "from a thresholds table long gone"}},
+                   "findings": [{"category": "injection", "effect": 9.0, "systematic_bar": 1.0,
+                                 "confirmed": True, "valence": "vulnerability", "title": "t"}]})
+    assert set(out["severity"]) == {"identity", "sycophancy", "style", "reward_hacking"}
+    assert out["severity"]["reward_hacking"]["band"] == "High"
+
+
+def test_a_new_block_is_never_overwritten_by_an_old_one():
+    """Defensive: a half-migrated file must keep the current block, not the stale one."""
+    from rmi.runner import migrate
+    out = migrate({"injection": {"v": "old"}, "reward_hacking": {"v": "new"}, "findings": []})
+    assert out["reward_hacking"] == {"v": "new"}
+
+
+def test_the_old_slug_is_gone_from_the_vocabulary():
+    from rmi import runner, severity
+    assert "injection" not in runner.PROBES
+    assert "injection" not in severity.CATEGORIES
+    assert "injection" not in runner.PROBE_LABELS
+    assert runner.probe_heading("reward_hacking") == "Reward hacking"

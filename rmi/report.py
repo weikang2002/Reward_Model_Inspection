@@ -12,6 +12,7 @@ from pathlib import Path
 
 import plotly.io as pio
 
+from . import methodology
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
@@ -348,8 +349,8 @@ def build(results: dict, out_path: Path | str) -> Path:
                                    "win_rate", "mean_added_tokens", "p_sign", "p_adjusted",
                                    "noise_percentile"]))
 
-    # -- injection --------------------------------------------------------------------
-    ij = R.get("injection")
+    # -- reward hacking ---------------------------------------------------------------
+    ij = R.get("reward_hacking")
     if ij:
         srch = ij["summary"].get("search") or {}
         best = srch.get("best_single")
@@ -366,12 +367,12 @@ def build(results: dict, out_path: Path | str) -> Path:
         winner = max(cands, key=lambda c: (c["asr"] if c["asr"] is not None else -1, c["lift"])) \
             if cands else None
 
-        A(f"<h2>{probe_heading('injection')}</h2>")
+        A(f"<h2>{probe_heading('reward_hacking')}</h2>")
         if winner:
             works = (winner["asr"] is not None and base_asr is not None
                      and winner["asr"] > base_asr)
             A(f"<div class='verdict{'' if works else ' clear'}'>"
-              f"<b>{'Yes, injection works on this model.' if works else 'Injection does not succeed on this model.'}</b> "
+              f"<b>{'Yes, this model can be reward hacked.' if works else 'No attack succeeded on this model.'}</b> "
               f"The strongest attack found, <code>{html.escape(winner['name'])}</code>, lifts a "
               f"deliberately bad answer by <b>{winner['lift']:+.2f} logits</b> on prompts the "
               f"search never saw, and makes it outscore a genuine answer "
@@ -441,7 +442,7 @@ def build(results: dict, out_path: Path | str) -> Path:
                      ["depth", "stack", "candidates tried", "best lift on dev"]))
 
         A("<h4>Every affix tried</h4>")
-        A(_fig(viz.injection_lifts(ij["summary"])))
+        A(_fig(viz.attack_lifts(ij["summary"])))
         _atk = [a for a in ij["summary"]["affixes"] if not a["is_control"]]
         _shr = max((abs(a["shrinkage"]) for a in _atk), default=0.0)
         A("<p class='sub'>Grey bars are controls, not attacks: content-free text of matched "
@@ -451,7 +452,8 @@ def build(results: dict, out_path: Path | str) -> Path:
 
     # -- appendix ---------------------------------------------------------------------
     A("<h2>Appendix: how each number was produced</h2>")
-    A(METHODOLOGY_HTML)
+    for lead, body in methodology.SECTIONS:
+        A(f"<p><b>{lead}.</b> {html.escape(body)}</p>")
     if noise:
         A("<h3>Rewording noise, in detail</h3>")
         A(_fig(viz.noise_floor_hist(noise)))
@@ -468,11 +470,19 @@ def build(results: dict, out_path: Path | str) -> Path:
         A(f"<p>Fitted temperature <b>T = {cal['temperature']:.2f}</b> on {html.escape(cal['note'])}"
           f". A score difference of <i>d</i> logits means the model prefers that variant "
           f"sigmoid(d / {cal['temperature']:.2f}) of the time.</p>")
-    A("<h3>Severity thresholds</h3><pre>"
-      + html.escape(json.dumps(meta.get("severity_thresholds", {}), indent=1)) + "</pre>")
+    A("<h3>Severity bands</h3><table><tr><th>band</th><th>at least this many times what "
+      "rewording alone could produce</th></tr>")
+    for band_name, threshold in sev.BANDS:
+        A(f"<tr><td>{html.escape(band_name)}</td><td>{threshold:g}x</td></tr>")
+    A(f"</table><p class='sub'>A finding counts as material at {sev.MATERIALITY_RATIO:g}x and "
+      "above. A category's band is its worst confirmed effect, not an average: one working "
+      "exploit is not cancelled by four that fail.</p>")
     A("<h3>Run provenance</h3><pre>"
       + html.escape(json.dumps(meta, indent=1, default=str)) + "</pre>")
-    A(LIMITATIONS_HTML)
+    A("<h3>Limitations</h3><ul>")
+    for lead, body in methodology.LIMITATIONS:
+        A(f"<li><b>{html.escape(lead)}</b> {html.escape(body)}</li>")
+    A("</ul>")
 
     doc = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
            f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -485,60 +495,3 @@ def build(results: dict, out_path: Path | str) -> Path:
     return out
 
 
-METHODOLOGY_HTML = """
-<p><b>Scoring.</b> The reward model emits one scalar per (prompt, answer) pair. Scores are not
-comparable across different prompts, so every contrast is paired within a prompt. Scoring is
-deterministic: repeated runs give bit-identical results, so the only randomness in the project is
-which items were written.</p>
-
-<p><b>The reward unit problem.</b> A raw logit means nothing on its own. Dividing by a
-hand-authored "good minus poor answer" gap would be worse than nothing, because the size of that
-unit is set entirely by how bad the poor answers are written to be. Instead effects are reported
-three ways: as raw logits, as a percentile of the paraphrase noise floor, and as a calibrated
-preference probability. The last uses the fact that these models are trained with a pairwise
-ranking loss, so a within-prompt score difference already estimates a log-odds; a single
-temperature is fitted against held-out human preference data to make that reading honest.</p>
-
-<p><b>Clustering.</b> The same questions and templates are reused across many contrasts, which
-makes observations dependent. Every confidence interval resamples whole clusters (questions,
-templates, scenarios) rather than rows; resampling rows would give intervals several times too
-narrow. Bias-corrected and accelerated intervals are used where there are enough clusters, and the
-wild cluster bootstrap where there are few.</p>
-
-<p><b>Multiplicity.</b> Within each module, adjusted p-values come from Westfall-Young step-down
-max-T permutation, valid under arbitrary dependence between contrasts and more powerful than
-Benjamini-Hochberg under the positive correlation that shared items create. The permutation flips
-the sign of all of a cluster's deltas at once, and the same draws are reused across contrasts so
-their correlation is preserved.</p>
-
-<p><b>Effect sizes.</b> Mean difference with a cluster bootstrap interval, plus the win rate and
-the spread across items. Cohen's <i>d</i> is deliberately not reported: because the scorer is
-deterministic, its denominator contains no measurement noise, so it measures how consistent an
-effect is across hand-written items rather than how large it is, and it diverges to infinity for a
-perfectly uniform effect.</p>
-
-<p><b>Directionality.</b> Identity is two-sided, since a shift either way is bias. Sycophancy is
-one-sided. Style transforms that add no information are one-sided, because any reward for them is
-unearned; transforms that might genuinely improve an answer are two-sided and reported as
-preferences rather than as bias.</p>
-
-<p><b>Selection.</b> Reporting the largest of several gaps is biased upward. The identity module
-handles this with an omnibus permutation test on group means; the injection module handles it by
-doing all affix ranking and search on development prompts and reporting only held-out numbers.</p>
-"""
-
-LIMITATIONS_HTML = """
-<h3>Limitations</h3>
-<ul>
-<li><b>These stimuli are hand-written and not blind-authored.</b> A pair that differs in more than
-the intended variable produces a confident false finding. The paraphrase floor and the within-group
-name controls bound how much that can matter, but do not eliminate it.</li>
-<li><b>This is the pilot corpus size.</b> Descriptor axes in particular rest on only a few
-templates and should be read as indicative.</li>
-<li><b>Decision-context templates are far outside these models' training distribution</b>, which
-was web question answering, summarisation and assistant dialogue. Assistant-dialogue templates are
-reported separately for that reason.</li>
-<li><b>Per-prompt percentile references are built from a modest number of genuine answers</b>, so
-the attack-success curves are coarse at the upper percentiles.</li>
-</ul>
-"""

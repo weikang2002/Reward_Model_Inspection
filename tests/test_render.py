@@ -5,10 +5,12 @@ is a chart that quietly plots the wrong field, or a report that ships missing a 
 """
 
 import re
+from html import escape
 
 import pytest
 
 from rmi import viz
+from rmi import methodology
 from rmi.findings import self_check
 from rmi.report import build
 from rmi.runner import run_scan
@@ -110,10 +112,11 @@ def test_findings_vs_noise_ranks_by_ratio_and_keeps_the_largest():
 
 
 def test_every_bar_is_labelled_with_its_category():
-    """Titles alone made it impossible to tell an injection row from a style row."""
+    """Titles alone made it impossible to tell a reward-hacking row from a style row."""
     findings = [
         {"title": "x", "effect": 3.0, "systematic_bar": 1.0, "valence": "vulnerability",
-         "category": "injection", "detail": {"kind": "best_affix", "affix_id": "sep_double"}},
+         "category": "reward_hacking",
+         "detail": {"kind": "best_affix", "affix_id": "sep_double"}},
         {"title": "y", "effect": 2.0, "systematic_bar": 1.0, "valence": "informational",
          "category": "style", "detail": {"kind": "length_adjusted", "transform": "emoji"}},
     ]
@@ -122,7 +125,7 @@ def test_every_bar_is_labelled_with_its_category():
     assert any("emoji" in lab for lab in labels), labels
     # Trailing, so right-aligned ticks put the categories in a column beside the bars.
     assert all(lab.endswith("</b>") for lab in labels), labels
-    assert {lab.rsplit("<b>", 1)[1].rstrip("</b>") for lab in labels} == {"Injection", "Style"}
+    assert {lab.rsplit("<b>", 1)[1].rstrip("</b>") for lab in labels} == {"Reward hacking", "Style"}
 
 
 def test_a_finding_with_an_unexpected_valence_is_still_drawn():
@@ -286,9 +289,10 @@ def test_a_finding_with_no_structured_detail_falls_back_to_a_trimmed_sentence():
     long = ("Junk appended to a good answer costs 3.72 logits, so the model does notice "
             "irrelevant text even when it is appended rather than prepended")
     f = {"title": long, "effect": 3.0, "systematic_bar": 1.0, "valence": "healthy",
-         "category": "injection", "detail": {}}
+         "category": "reward_hacking", "detail": {}}
     lab = [y for y, _ in _bars(viz.findings_vs_noise([f]))][0]
-    assert lab == "Junk appended to a good answer costs 3.72 logits  <b>Injection</b>", lab
+    assert lab == ("Junk appended to a good answer costs 3.72 logits  "
+                   "<b>Reward hacking</b>"), lab
 
 
 # ---------------------------------------------------------------------------------------
@@ -372,3 +376,32 @@ def test_the_calibration_half_of_the_appendix_uses_the_same_naming(tmp_path):
                            "median_abs_gap": 1.0, "bins": []}
     html = build(scan, tmp_path / "cal.html").read_text()
     assert "Agreement with human preferences, in detail" in html
+
+
+# ---------------------------------------------------------------------------------------
+# the methodology write-up
+# ---------------------------------------------------------------------------------------
+
+
+def test_the_report_carries_every_methodology_section(rendered):
+    """It lived twice, as Markdown here and HTML there, and the copies drifted apart."""
+    _, html = rendered
+    for lead, body in methodology.SECTIONS:
+        assert f"<b>{lead}.</b>" in html, lead
+        assert escape(body[:60]) in html, lead
+    for lead, _ in methodology.LIMITATIONS:
+        assert escape(lead) in html, lead
+
+
+def test_the_method_text_describes_the_unit_the_code_actually_uses():
+    """Both copies still said 'a percentile of the paraphrase noise floor' long after that went."""
+    prose = " ".join(b for _, b in methodology.SECTIONS)
+    assert "rewording alone could produce" in prose
+    assert "percentile of the paraphrase noise floor" not in prose
+
+
+def test_the_method_text_needs_no_markup_to_render_in_either_place():
+    """Plain bodies are what let one source feed a Markdown app and an HTML report."""
+    for lead, body in methodology.SECTIONS + methodology.LIMITATIONS:
+        for markup in ("**", "<b>", "<i>", "<p>"):
+            assert markup not in body, (lead, markup)

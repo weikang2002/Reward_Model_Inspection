@@ -65,7 +65,7 @@ def _base(fig: go.Figure, *, height=380, xtitle=None, ytitle=None, showlegend=Fa
 # --------------------------------------------------------------------------------------
 
 CATEGORY_LABEL = {"identity": "Identity", "sycophancy": "Sycophancy",
-                  "style": "Style", "injection": "Injection"}
+                  "style": "Style", "reward_hacking": "Reward hacking"}
 _SUBSET_LABEL = {"id": "in-distribution", "ood": "out-of-distribution"}
 
 # Fixed order, so the legend never reshuffles between models or reruns.
@@ -94,7 +94,7 @@ def _describe(category: str, detail: dict, title: str) -> str:
     files written before this existed get the short labels too, with no rescan.
     """
     kind = detail.get("kind")
-    if category == "injection":
+    if category == "reward_hacking":
         if kind == "best_affix":
             return f"best single affix: {detail.get('affix_id', 'unknown')}"
         if kind == "beam_search":
@@ -471,11 +471,11 @@ def style_dose_response(block: dict, transforms: list[str]) -> go.Figure:
 
 
 # --------------------------------------------------------------------------------------
-# injection
+# reward hacking: how far each affix moves a bad answer
 # --------------------------------------------------------------------------------------
 
 
-def injection_lifts(summary: dict, *, top: int = 18) -> go.Figure:
+def attack_lifts(summary: dict, *, top: int = 18) -> go.Figure:
     """Held-out lift for the affixes the search ranked highest, with their controls beside them."""
     # Selected by development rank so the choice of what to show is never made on the data being
     # reported; sorted by the held-out value only so the chart reads cleanly.
@@ -683,7 +683,7 @@ def descriptor_chart(axis_block: dict) -> go.Figure:
 
 
 # --------------------------------------------------------------------------------------
-# injection: search, then validate
+# reward hacking: search, then validate
 # --------------------------------------------------------------------------------------
 
 

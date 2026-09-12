@@ -61,6 +61,7 @@ def test_cache_key_separates_every_field_that_changes_the_score():
     class FakeRM:
         model_id, revision, max_length = "m", "r1", DEFAULT_MAX_LENGTH
         split_special_tokens = False
+        prompt_format = "bare"
         _key = None
 
     from rmi.scoring import RewardModel
@@ -73,8 +74,11 @@ def test_cache_key_separates_every_field_that_changes_the_score():
     }
     for name, fn in variations.items():
         assert fn() != base, f"{name} must change the cache key"
+    # prompt_format included: the same question and answer scored under two formulations are two
+    # different strings reaching the model, so sharing a key would serve one for the other.
     for field, value in (("model_id", "other"), ("revision", "r2"),
-                         ("max_length", 256), ("split_special_tokens", True)):
+                         ("max_length", 256), ("split_special_tokens", True),
+                         ("prompt_format", "hh")):
         setattr(rm, field, value)
         assert key("q", "a") != base, f"{field} must change the cache key"
         setattr(rm, field, getattr(FakeRM, field))
@@ -178,3 +182,42 @@ def test_stub_scorer_implements_the_scorer_protocol():
     assert s.count_tokens("q", "a b c") == 3
     assert set(s.sanity_check()) >= {"passed", "margin"}
     assert "model_id" in s.provenance
+
+
+# ---------------------------------------------------------------------------------------
+# per-model input formulation
+# ---------------------------------------------------------------------------------------
+
+
+def test_the_gpt2_reward_models_ask_for_the_hh_formulation():
+    """Their card says to use the Anthropic/hh-rlhf formulation. Bare pairing is a silent error."""
+    from rmi.scoring import prompt_format_for
+    assert prompt_format_for("Ray2333/gpt2-large-harmless-reward_model") == "hh"
+    assert prompt_format_for("Ray2333/gpt2-large-helpful-reward_model") == "hh"
+
+
+def test_an_unlisted_model_gets_the_bare_pairing():
+    from rmi.scoring import DEFAULT_PROMPT_FORMAT, prompt_format_for
+    assert prompt_format_for("OpenAssistant/reward-model-deberta-v3-base") == "bare"
+    assert prompt_format_for("someone/a-model-nobody-has-registered") == DEFAULT_PROMPT_FORMAT
+
+
+def test_the_hh_formulation_marks_the_turn_boundary_and_leaves_the_answer_alone():
+    """Without markers GPT-2 sees "...France?Paris." with no boundary at all."""
+    from rmi.scoring import PROMPT_FORMATS
+    q, a = PROMPT_FORMATS["hh"]("What is the capital of France?", "Paris.")
+    assert q == "\n\nHuman: What is the capital of France? \n\nAssistant:"
+    assert a == "Paris.", "the answer half is passed through untouched"
+
+
+def test_the_bare_formulation_changes_nothing():
+    from rmi.scoring import PROMPT_FORMATS
+    assert PROMPT_FORMATS["bare"]("q", "a") == ("q", "a")
+
+
+def test_an_unknown_prompt_format_is_refused_before_anything_is_downloaded(monkeypatch):
+    from rmi import scoring
+    monkeypatch.setattr(scoring, "check_download_size",
+                        lambda *a, **k: pytest.fail("must not reach the Hub"))
+    with pytest.raises(ValueError, match="unknown prompt format"):
+        scoring.RewardModel("any/model", prompt_format="klingon")

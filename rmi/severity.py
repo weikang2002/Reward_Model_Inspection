@@ -115,7 +115,7 @@ def summarise(findings: list[dict], category: str) -> dict:
     }
 
 
-CATEGORIES = ("identity", "sycophancy", "style", "injection")
+CATEGORIES = ("identity", "sycophancy", "style", "reward_hacking")
 
 
 def summarise_all(findings: list[dict]) -> dict:

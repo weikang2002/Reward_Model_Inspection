@@ -31,16 +31,41 @@ from typing import Iterable, Protocol, Sequence
 import torch
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 
-# One prompt format, pinned across every module. These RMs are format-sensitive (they were trained
-# on webgpt / summarize-from-feedback / hh-rlhf, which use different turn markers), so unlogged
-# format drift between modules would make cross-module comparison meaningless.
-PROMPT_FORMAT = "bare"  # tokenizer(question, answer), no turn markers added
+# One prompt format per model, pinned across every module and recorded in provenance and in the
+# cache key. These RMs score the exact string they were trained on, so unlogged format drift
+# between modules would make cross-module comparison meaningless.
+#
+# The format is a property of the training data, not of the architecture, so it cannot be sniffed
+# from the config and has to be recorded per model. Getting it wrong does not raise: it returns
+# plausible-looking numbers for every probe, which is what the model-card self-check is for.
+PROMPT_FORMATS = {
+    # tokenizer(question, answer) with no turn markers added.
+    "bare": lambda q, a: (q, a),
+    # Anthropic/hh-rlhf formulation, which the Ray2333 GPT-2 reward models require. Their card
+    # passes the marked-up prompt and the bare answer as the two halves of the pair.
+    "hh": lambda q, a: (f"\n\nHuman: {q} \n\nAssistant:", a),
+}
+DEFAULT_PROMPT_FORMAT = "bare"
+MODEL_PROMPT_FORMAT = {
+    "Ray2333/gpt2-large-harmless-reward_model": "hh",
+    "Ray2333/gpt2-large-helpful-reward_model": "hh",
+}
+# Kept as the name of the default, since every module and both renderers report it.
+PROMPT_FORMAT = DEFAULT_PROMPT_FORMAT
 DEFAULT_MAX_LENGTH = 512
+
+
+def prompt_format_for(model_id: str) -> str:
+    """Which input formulation a model was trained on. Unknown models get the bare pairing."""
+    return MODEL_PROMPT_FORMAT.get(model_id, DEFAULT_PROMPT_FORMAT)
 
 # This tool is meant to run on a laptop, on CPU or Apple Silicon. A reward model that does not fit
 # comfortably is not merely slow: CPU scoring is roughly 25x slower than MPS, which turns a
 # few-minute scan into most of an hour, and the download itself can fill a disk.
-MAX_DOWNLOAD_BYTES = 2 * 1024**3
+#
+# 3 GB covers the class of model this is for: gpt2-large at 774M parameters lands at 2.89 GB in
+# fp32, against deberta-v3-large's 435M and 1.63 GB. A 7B model is 12.55 GB and stays refused.
+MAX_DOWNLOAD_BYTES = 3 * 1024**3
 
 # Weight files, in the order transformers prefers them. Only one format is ever fetched, so
 # summing every weight file in a repo overstates the download, sometimes badly.
@@ -273,8 +298,13 @@ class RewardModel:
         split_special_tokens: bool = False,
         progress: bool = False,
         allow_large_download: bool = False,
+        prompt_format: str | None = None,
     ):
         self.model_id = model_id
+        self.prompt_format = prompt_format or prompt_format_for(model_id)
+        if self.prompt_format not in PROMPT_FORMATS:
+            raise ValueError(f"unknown prompt format {self.prompt_format!r}; "
+                             f"known: {sorted(PROMPT_FORMATS)}")
         self.max_length = max_length
         self.batch_size = batch_size
         self.split_special_tokens = split_special_tokens
@@ -294,12 +324,27 @@ class RewardModel:
                 "single scalar output head. A multi-class classifier has no well-defined reward."
             )
         self.config = config
+        # Never widen past what the model can attend to. DeBERTa and GPT-2 both leave the default
+        # 512 untouched; this only protects a model with a smaller window.
+        window = getattr(config, "max_position_embeddings", None) or getattr(
+            config, "n_positions", None)
+        if window:
+            self.max_length = min(self.max_length, int(window))
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # GPT-2 ships no pad token, so batched scoring raises outright. Reusing end-of-text is the
+        # standard remedy and is safe here because no stimulus contains that literal.
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         # fp32 deliberately: a measurement tool cannot afford fp16 accumulation drift, and the
         # measured numerical noise at fp32 is 0.0 run-to-run against a 0.84-logit semantic floor.
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_id, dtype=torch.float32
         ).eval()
+        # A causal-LM classification head scores the last non-padding token, and finds it by
+        # matching pad_token_id. Left unset it reads whatever sits at the end of the padded row,
+        # which for every sequence shorter than the longest in its batch is padding.
+        if getattr(self.model.config, "pad_token_id", None) is None:
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
         self.device = pick_device(device)
         self.model.to(self.device)
 
@@ -317,7 +362,7 @@ class RewardModel:
         return {
             "model_id": self.model_id,
             "revision": self.revision,
-            "prompt_format": PROMPT_FORMAT,
+            "prompt_format": self.prompt_format,
             "max_length": self.max_length,
             "split_special_tokens": self.split_special_tokens,
             "device": self.device,
@@ -333,7 +378,7 @@ class RewardModel:
             [
                 self.model_id,
                 self.revision,
-                PROMPT_FORMAT,
+                self.prompt_format,
                 self.max_length,
                 self.split_special_tokens,
                 question,
@@ -351,11 +396,19 @@ class RewardModel:
             kw["split_special_tokens"] = True
         return kw
 
+    def _format(self, pairs: Sequence[Pair]) -> tuple[list[str], list[str]]:
+        """Apply this model's input formulation. The single place it is applied, so measurement
+        and scoring can never see different text."""
+        fmt = PROMPT_FORMATS[self.prompt_format]
+        formatted = [fmt(q, a) for q, a in pairs]
+        return [f[0] for f in formatted], [f[1] for f in formatted]
+
     def _measure(self, pairs: Sequence[Pair]) -> list[dict]:
         """Tokenise without truncation to learn the true length and the tokenizer artifacts."""
+        questions, answers = self._format(pairs)
         enc = self.tokenizer(
-            [p[0] for p in pairs],
-            [p[1] for p in pairs],
+            questions,
+            answers,
             truncation=False,
             padding=False,
             **self._encode_kwargs(),
@@ -413,9 +466,10 @@ class RewardModel:
             for start in it:
                 sel = order[start : start + self.batch_size]
                 batch_pairs = [pairs[todo[j]] for j in sel]
+                questions, answers = self._format(batch_pairs)
                 enc = self.tokenizer(
-                    [p[0] for p in batch_pairs],
-                    [p[1] for p in batch_pairs],
+                    questions,
+                    answers,
                     truncation=True,
                     max_length=self.max_length,
                     padding=True,

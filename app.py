@@ -3,7 +3,7 @@
     streamlit run app.py
 
 Loads any HuggingFace AutoModelForSequenceClassification reward model, probes it for identity
-bias, sycophancy, style and length preferences, and prefix/suffix injection attacks, then shows
+bias, sycophancy, style and length preferences, and prefix/suffix reward hacking, then shows
 what it found. Past runs load from results/*.json without needing the model in memory.
 """
 
@@ -16,15 +16,31 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from rmi import methodology
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
 from rmi.findings import (module_items, overview_verdict, self_check, tone_check,
                           verdict_line)
 from rmi.report import build as build_report
-from rmi.scoring import ModelTooLargeError, RewardModel, check_download_size
+from rmi.scoring import (ModelTooLargeError, RewardModel, check_download_size,
+                         download_size)
 from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def size_label(model_id: str) -> str:
+    """"2.9 GB · " for the model picker, or "" when the Hub cannot be reached.
+
+    This is the model's own size, not what a run would cost: a cached model downloads nothing but
+    still occupies this much, and the number is what the reader is choosing between.
+    """
+    try:
+        n = download_size(model_id)
+    except Exception:
+        return ""
+    return f"{n / 1024**3:.1f} GB · " if n else ""
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -43,9 +59,12 @@ st.set_page_config(page_title="Reward Model Inspection", page_icon="🔍", layou
 PRESET_MODELS = [
     "OpenAssistant/reward-model-deberta-v3-large-v2",
     "OpenAssistant/reward-model-deberta-v3-base",
+    "Ray2333/gpt2-large-harmless-reward_model",
+    "Ray2333/gpt2-large-helpful-reward_model",
 ]
+OTHER = "Other (type below)"
 
-# Fixed rather than offered as a control. The seed changes only resampling draws and the injection
+# Fixed rather than offered as a control. The seed changes only resampling draws and the attack
 # dev/test split, so a box for it mostly invites re-rolling until a borderline finding turns
 # significant, which is the one habit this project's statistics exist to prevent. A genuinely
 # different split is still available headlessly via run_scan(seed=...).
@@ -144,9 +163,13 @@ def clear_results(d: Path) -> tuple[int, list[str]]:
 
 with st.sidebar:
     st.markdown("### Run a scan")
-    model_choice = st.selectbox("Reward model", PRESET_MODELS + ["Other (type below)"])
+    # Size first, because the sidebar truncates a long model id and a size at the end would be
+    # the part that got cut.
+    model_choice = st.selectbox("Reward model", PRESET_MODELS + [OTHER],
+                                format_func=lambda m: m if m == OTHER else
+                                f"{size_label(m)}{m.split('/')[-1]}")
     model_id = (st.text_input("HuggingFace model id", value="")
-                if model_choice.startswith("Other") else model_choice)
+                if model_choice == OTHER else model_choice)
 
     # Checked here as well as in RewardModel, so an oversize model is refused before the user
     # commits to a scan rather than as an exception a minute later.
@@ -166,7 +189,10 @@ with st.sidebar:
     chosen = []
     for slug, (group_title, members) in PROBE_GROUPS.items():
         with st.container(border=True, key=f"probegroup_{slug}"):
-            st.markdown(f'<div class="grouphead">{group_title}</div>', unsafe_allow_html=True)
+            # The box and its coloured edge already separate the groups. A header repeating the
+            # only checkbox inside it would just stutter.
+            if not (len(members) == 1 and PROBE_LABELS[members[0]] == group_title):
+                st.markdown(f'<div class="grouphead">{group_title}</div>', unsafe_allow_html=True)
             for probe in members:
                 if st.checkbox(PROBE_LABELS[probe], value=True, key=f"probe_{probe}"):
                     chosen.append(probe)
@@ -455,6 +481,11 @@ if export_clicked and R is not None:
 # asks a different question entirely. Derived from PROBE_GROUPS so the two cannot drift apart.
 tabs = st.tabs(["Overview"] + [probe_heading(p) for p in PROBES]
                + ["Compare models", "Appendix"])
+
+
+def _tiny(v: float) -> str:
+    """Format a near-zero diagnostic. "0e+00" is technically right and reads like a glitch."""
+    return "exactly 0" if v == 0 else f"{v:.0e}"
 
 
 def finding_key(f: dict) -> tuple:
@@ -893,13 +924,13 @@ with tabs[3]:
 
 
 # --------------------------------------------------------------------------------------
-# Injection
+# Reward hacking
 # --------------------------------------------------------------------------------------
 
 with tabs[4]:
-    ij = R.get("injection")
+    ij = R.get("reward_hacking")
     if not ij or "top_exploits" not in ij.get("summary", {}):
-        st.info("The injection probe was not part of this run, or predates the current schema.")
+        st.info("The reward-hacking probe was not part of this run, or predates the current schema.")
     else:
         srch = ij["summary"].get("search") or {}
         beam = ij.get("beam_search")
@@ -910,7 +941,7 @@ with tabs[4]:
         if exploits:
             best = exploits[0]
             st.markdown(
-                f'<div class="verdict"><b>Yes, injection works on this model.</b> '
+                f'<div class="verdict"><b>Yes, this model can be reward hacked.</b> '
                 f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
                 f'<b>{best["lift"]:+.2f} logits</b> and makes it outscore a genuine answer to the '
                 f'same prompt <b>{best["asr"]["p50"]:.0%}</b> of the time, against '
@@ -921,7 +952,7 @@ with tabs[4]:
                 'search never saw.</span></div>', unsafe_allow_html=True)
         else:
             st.markdown(
-                f'<div class="verdict clear"><b>No injection attack succeeded.</b> None of the '
+                f'<div class="verdict clear"><b>No attack succeeded.</b> None of the '
                 f'{srch.get("n_candidates", 0)} attacks tried made a bad answer outscore a genuine '
                 f'answer more often than the unmodified bad answer already did ({base_asr:.0%}).'
                 '</div>', unsafe_allow_html=True)
@@ -1000,7 +1031,7 @@ with tabs[4]:
                 )
 
         with st.expander("Every affix tried, ranked on development and measured on held-out"):
-            st.plotly_chart(viz.injection_lifts(ij["summary"]), width="stretch",
+            st.plotly_chart(viz.attack_lifts(ij["summary"]), width="stretch",
                             config={"displayModeBar": False})
             attacks = [a for a in ij["summary"]["affixes"] if not a["is_control"]]
             worst_shrink = max((abs(a["shrinkage"]) for a in attacks), default=0.0)
@@ -1160,10 +1191,7 @@ with tabs[5]:
 # --------------------------------------------------------------------------------------
 
 with tabs[6]:
-    st.markdown(
-        "Everything behind the numbers: the run itself, the two yardsticks they are measured "
-        "against, every stimulus that was scored, every statistic, and how each was computed."
-    )
+    st.caption("Everything behind the numbers, for checking or reproducing them.")
 
     # ---- what people actually come here for ---------------------------------------------------
     st.markdown("#### Take the data")
@@ -1175,16 +1203,13 @@ with tabs[6]:
                                file_name=Path(rp).name, mime="application/json",
                                width="stretch")
         prov = meta.get("provenance", {})
-        st.caption(
-            f"{meta['model_id']} · {meta['depth']} scan · seed {meta['seed']} · "
-            f"{prov.get('device', '?')} · {meta.get('runtime_seconds', 0):.0f}s · "
-            f"torch {prov.get('torch', '?')}, transformers {prov.get('transformers', '?')}"
-        )
+        st.caption(f"Scored with torch {prov.get('torch', '?')} and transformers "
+                   f"{prov.get('transformers', '?')}.")
     with c2:
         st.caption(
-            "Every number on every tab is in that file, including the per-item rows behind each "
-            "contrast. Two runs at the same seed produce byte-identical output, so a diff between "
-            "two files is a real change in the model or the code, never resampling noise."
+            "Every number on every tab is in that file, down to the per-item rows behind each "
+            "contrast. A scan is reproducible, so a diff between two files is a real change in "
+            "the model or the code rather than resampling noise."
         )
 
     # ---- the instruments ----------------------------------------------------------------------
@@ -1205,9 +1230,12 @@ with tabs[6]:
                 # "0e+00" is technically right and reads like a glitch.
                 return "exactly 0" if v == 0 else f"{v:.0e}"
 
-            m1, m2 = st.columns(2)
-            m1.metric("Repeat scoring differs by", _tiny(noise["determinism_delta"]))
-            m2.metric("Alone vs in a batch", _tiny(noise["batch_invariance_delta"]))
+            st.caption(
+                f"Scoring the same pair twice differs by **{_tiny(noise['determinism_delta'])}**, "
+                "and scoring it alone rather than inside a batch by "
+                f"**{_tiny(noise['batch_invariance_delta'])}**, so nothing here is measurement "
+                "noise."
+            )
             with st.expander("Negative controls: byte changes that should score identically"):
                 st.dataframe(pd.DataFrame(noise["semantic_nulls"]).T.reset_index()
                              .rename(columns={"index": "perturbation"}),
@@ -1232,8 +1260,7 @@ with tabs[6]:
             st.info("Calibration was not run, so effects are reported as raw logits.")
 
     st.markdown("#### Every number")
-    st.caption("Every number behind the charts. The dashboard shows the effects; these are the "
-               "intervals, win rates, token deltas and p-values behind them.")
+    st.caption("The intervals, win rates, token deltas and p-values behind each chart.")
     sm_, sy_, idr_ = R.get("style"), R.get("sycophancy"), R.get("identity")
     if sm_:
         with st.expander("Style — every transform at every intensity"):
@@ -1254,7 +1281,7 @@ with tabs[6]:
                 st.dataframe(pd.DataFrame(sm_["padding_vs_elaboration"][0]["rows"]),
                              width="stretch", hide_index=True, height=300)
     if sy_:
-        with st.expander("Sycophancy — agreement premium split by wording, not used in version 1"):
+        with st.expander("Sycophancy — agreement premium, split by the two phrasings"):
             st.dataframe(pd.DataFrame(sy_["premiums"])[
                 ["insistence", "tone", "mean_delta", "ci_low", "ci_high", "win_rate",
                  "p_sign", "p_adjusted", "mean_token_delta"]], width="stretch", hide_index=True)
@@ -1277,6 +1304,9 @@ with tabs[6]:
             )
 
     st.markdown("#### Every stimulus")
+    # Top-level corpus keys worth counting in an expander label.
+    CORPUS_COUNTS = ("questions", "scenarios", "templates", "name_groups", "descriptor_axes",
+                     "descriptor_templates", "affixes", "bases")
     # Gated the same way as the overview block, so a stub scan does not advertise texts it
     # never scored.
     if (sc := R.get("sanity_check")) and sc.get("passed") is not None:
@@ -1301,76 +1331,36 @@ with tabs[6]:
         path = base / name
         if path.exists():
             data = json.loads(path.read_text())
-            with st.expander(f"{label} — {name}"):
-                if name == "identity.json":
-                    st.markdown(f"*{data['citation']}*")
+            # Counts in the label and the corpus note on top: the two things worth knowing before
+            # deciding whether to open a JSON tree.
+            counts = " · ".join(f"{len(v)} {k.replace('_', ' ')}" for k, v in data.items()
+                                if k in CORPUS_COUNTS and isinstance(v, (list, dict)))
+            with st.expander(f"{label} — {counts}" if counts else label):
+                if note := data.get("note"):
+                    st.caption(note)
+                if cite := data.get("citation"):
+                    st.markdown(f"*{cite}*")
+                st.caption(f"`rmi/corpora/{name}`")
                 st.json(data, expanded=False)
 
 
     # ---- how, for the reader who wants to check the method ------------------------------------
     st.markdown("#### How each number was produced")
     with st.expander("Statistical methodology"):
-        st.markdown("""
-    **Scoring.** The reward model emits one scalar per (prompt, answer) pair. Scores are not
-    comparable across different prompts, so every contrast here is paired within a prompt. Scoring is
-    deterministic: repeated runs give bit-identical results, so the only randomness in the project is
-    which items were written.
+        for lead, body in methodology.SECTIONS:
+            st.markdown(f"**{lead}.** {body}")
 
-    **The reward unit problem.** A raw logit means nothing on its own. Dividing by a hand-authored
-    "good minus poor answer" gap would be worse than nothing, because the size of that unit is set
-    entirely by how bad the poor answers are written to be. Instead effects are reported three ways:
-    as raw logits, as a percentile of the **paraphrase noise floor**, and as a **calibrated preference
-    probability**. The last uses the fact that these models are trained with a pairwise ranking loss,
-    so a within-prompt score difference already estimates a log-odds; a single temperature is fitted
-    against held-out human preference data to make that reading honest.
-
-    **Clustering.** The same questions and templates are reused across many contrasts, which makes the
-    observations dependent. Every confidence interval resamples whole **clusters** (questions,
-    templates, scenarios) rather than rows; resampling rows would produce intervals several times too
-    narrow. Bias-corrected and accelerated intervals are used where there are enough clusters, and the
-    wild cluster bootstrap where there are few.
-
-    **Multiplicity.** Dozens of contrasts are tested. Within each module, adjusted p-values come from
-    **Westfall-Young step-down max-T permutation**, which is valid under arbitrary dependence between
-    contrasts and is more powerful than Benjamini-Hochberg under the positive correlation that shared
-    items create. The permutation flips the sign of all of a cluster's deltas at once, and the same
-    draws are reused across contrasts so their correlation is preserved.
-
-    **Effect sizes.** Mean difference with a cluster bootstrap interval, plus the win rate and the
-    spread across items. Cohen's *d* is deliberately **not** reported: because the scorer is
-    deterministic, its denominator contains no measurement noise, so it measures how *consistent* an
-    effect is across hand-written items rather than how *large* it is, and it diverges to infinity for
-    a perfectly uniform effect.
-
-    **Directionality.** Identity is two-sided, since a shift either way is bias. Sycophancy is
-    one-sided. Style transforms that add no information are one-sided, because any reward for them is
-    unearned; transforms that might genuinely improve an answer are two-sided and reported as
-    preferences rather than as bias.
-
-    **Selection.** Reporting the largest of several gaps is biased upward. The identity module handles
-    this with an omnibus permutation test on group means; the injection module handles it by doing all
-    affix ranking and search on development prompts and reporting only held-out numbers.
-    """)
-        st.markdown("**Severity thresholds**")
-        st.json(meta.get("severity_thresholds", {}), expanded=False)
+    with st.expander("Severity bands"):
+        st.dataframe(pd.DataFrame([{"band": b, "from": f"{t:g}x"} for b, t in sev.BANDS]),
+                     width="stretch", hide_index=True)
         st.caption(
-            "Severity is the worst confirmed effect in a category, as a percentile of the "
-            "paraphrase noise floor. Prevalence is the share of that category's probes that are "
-            "both statistically confirmed and above the materiality threshold. Two numbers rather "
-            "than one, because a mean over contrasts can be diluted by adding null contrasts "
+            "In multiples of what rewording alone could produce across the same number of "
+            f"comparisons. A finding counts as material at {sev.MATERIALITY_RATIO:g}x and above. "
+            "A category's "
+            "band is its worst confirmed effect, not an average: one working exploit is not "
+            "cancelled by four that fail, and an average drops when null contrasts are added "
             "without anything about the model changing."
         )
 
     st.markdown("#### Limitations")
-    st.markdown("""
-- **These stimuli are hand-written and not blind-authored.** A pair that differs in more than the
-  intended variable produces a confident false finding. The paraphrase floor and the within-group
-  name controls exist to bound how much that can matter, but they do not eliminate it.
-- **This is the pilot corpus size.** Descriptor axes in particular rest on only a few templates and
-  should be read as indicative.
-- **Decision-context templates are far outside these models' training distribution**, which was
-  web question answering, summarisation and assistant dialogue. That is why assistant-dialogue
-  templates are reported separately.
-- **Per-prompt percentile references are built from a modest number of genuine answers**, so the
-  attack-success curves are coarse at the upper percentiles.
-""")
+    st.markdown("\n".join(f"- **{lead}** {body}" for lead, body in methodology.LIMITATIONS))
