@@ -99,6 +99,11 @@ and with a handful of probes a 90th percentile lands on the second largest and h
 the reader needs. A banner and its category pill must take their colour from the same `band()`
 call, or the same effect shows as a red alarm beside an amber chip.
 
+**The seed is fixed at `SEED = 0` in `app.py`, not exposed as a control.** It reaches only the
+resampling draws and injection's dev/test split, so a box for it does nothing but let a user
+re-roll a borderline finding until it clears its threshold. `run_scan(seed=...)` still takes it,
+and the value is recorded in the results file and shown in the appendix.
+
 **Never resample rows.** The same questions and templates recur across contrasts, so every interval
 resamples whole clusters (`cluster_bootstrap_ci`, `wild_cluster_bootstrap_p` in
 `rmi/stats/inference.py`). Row resampling gives intervals several times too narrow.

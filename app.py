@@ -44,6 +44,12 @@ PRESET_MODELS = [
     "OpenAssistant/reward-model-deberta-v3-base",
 ]
 
+# Fixed rather than offered as a control. The seed changes only resampling draws and the injection
+# dev/test split, so a box for it mostly invites re-rolling until a borderline finding turns
+# significant, which is the one habit this project's statistics exist to prevent. A genuinely
+# different split is still available headlessly via run_scan(seed=...).
+SEED = 0
+
 st.markdown("""
 <style>
   .block-container {padding-top: 2.2rem; max-width: 1500px;}
@@ -77,6 +83,9 @@ st.markdown("""
   [class*="st-key-probegroup"] [data-testid="stVerticalBlock"] {gap:.25rem !important;}
   [class*="st-key-probegroup_bias"] {border-left:4px solid #2a78d6 !important;}
   [class*="st-key-probegroup_hack"] {border-left:4px solid #d03b3b !important;}
+  /* Same boxes for the two auxiliary blocks, left uncoloured: they are housekeeping, and a
+     coloured edge would read as another probe category. */
+  [class*="st-key-aux_"] {border-radius:9px !important; margin-bottom:.5rem;}
   [class*="st-key-drill"] details {border:1px solid #2a78d6 !important;
      border-left-width:5px !important; background:#ffffff !important; border-radius:9px;}
   [class*="st-key-drill"] details > summary {background:#ffffff !important;}
@@ -166,10 +175,11 @@ with st.sidebar:
         "reported against, so it is not optional. The human-preference check needs a one-off "
         "dataset download."
     )
-    depth = st.select_slider("Depth", options=list(PRESETS), value="standard")
-    seed = st.number_input("Seed", value=0, step=1)
+    depth = st.select_slider("Depth", options=list(PRESETS), value="standard",
+                             format_func=str.capitalize)
     st.caption(
-        "Deep searches harder for stacked attacks. Scores are cached, so re-runs are near-instant."
+        "Quick skips the search for stacked attacks entirely, so it cannot find one. Deep searches "
+        "wider and longer. Scores are cached, so re-runs are near-instant."
     )
     run_clicked = st.button("Run scan", type="primary", width="stretch",
                             disabled=not model_id or too_large is not None)
@@ -181,52 +191,59 @@ with st.sidebar:
     picked = st.selectbox("Results file", labels, index=len(labels) - 1 if labels else None) \
         if files else None
 
+    # Export and maintenance are one section: neither probes anything, both act on the files in
+    # results/ rather than on a model, and grouping them keeps the two things that do run a scan
+    # or read one at the top of the sidebar.
     st.divider()
-    st.markdown("### Export")
-    export_clicked = st.button("Build standalone HTML report", width="stretch",
-                               disabled="results" not in st.session_state)
-    st.caption("One self-contained file with every chart inlined. Opens in any browser with no "
-               "Python and no network.")
+    st.markdown("### Saved files")
 
-    st.divider()
-    st.markdown("### Maintenance")
-    if done := st.session_state.pop("clear_done", None):
-        st.success(done)
-    stale = clearable_results(RESULTS_DIR)
-    size_mb = sum(f.stat().st_size for f in stale) / 1e6
-    if not stale:
-        st.button("Clear saved results", width="stretch", disabled=True)
-        st.caption("No saved results.")
-    elif not st.session_state.get("confirm_clear"):
-        # Armed first, deleted second: a single stray click would otherwise cost a scan that
-        # takes minutes of GPU time to reproduce.
-        if st.button("Clear saved results", width="stretch"):
-            st.session_state["confirm_clear"] = True
-            st.rerun()
-        st.caption(f"{len(stale)} files · {size_mb:.1f} MB of results JSON and exported reports.")
-    else:
-        st.warning(f"Delete {len(stale)} files, {size_mb:.1f} MB? This cannot be undone.")
-        c1, c2 = st.columns(2)
-        if c1.button("Delete permanently", type="primary", width="stretch"):
-            removed, failed = clear_results(RESULTS_DIR)
-            st.session_state.pop("confirm_clear", None)
-            st.session_state.pop("results", None)
-            st.session_state.pop("results_name", None)
-            if failed:
-                st.error(f"Removed {removed} files. Could not remove " + ", ".join(failed))
-            else:
-                # Rerun so the app falls back to its landing page rather than rendering a run
-                # whose file has just been deleted, and so the picker re-reads the directory.
-                st.session_state["clear_done"] = f"Removed {removed} files."
+    with st.container(border=True, key="aux_export"):
+        st.markdown('<div class="grouphead">Export</div>', unsafe_allow_html=True)
+        export_clicked = st.button("Build standalone HTML report", width="stretch",
+                                   disabled="results" not in st.session_state)
+        st.caption("One self-contained file with every chart inlined. Opens in any browser with "
+                   "no Python and no network.")
+
+    with st.container(border=True, key="aux_clear"):
+        st.markdown('<div class="grouphead">Maintenance</div>', unsafe_allow_html=True)
+        if done := st.session_state.pop("clear_done", None):
+            st.success(done)
+        stale = clearable_results(RESULTS_DIR)
+        size_mb = sum(f.stat().st_size for f in stale) / 1e6
+        if not stale:
+            st.button("Clear saved results", width="stretch", disabled=True)
+            st.caption("No saved results.")
+        elif not st.session_state.get("confirm_clear"):
+            # Armed first, deleted second: a single stray click would otherwise cost a scan that
+            # takes minutes of GPU time to reproduce.
+            if st.button("Clear saved results", width="stretch"):
+                st.session_state["confirm_clear"] = True
                 st.rerun()
-        if c2.button("Cancel", width="stretch"):
-            st.session_state.pop("confirm_clear", None)
-            st.rerun()
-    st.caption(
-        "The score cache in `.rmi_cache/` is left alone. Scores are deterministic and keyed by "
-        "model id, revision and text, so a cached score is never stale, only expensive to rebuild. "
-        "Results JSON does go stale when the analysis code changes."
-    )
+            st.caption(f"{len(stale)} files · {size_mb:.1f} MB of results JSON and exported "
+                       "reports.")
+        else:
+            st.warning(f"Delete {len(stale)} files, {size_mb:.1f} MB? This cannot be undone.")
+            c1, c2 = st.columns(2)
+            if c1.button("Delete permanently", type="primary", width="stretch"):
+                removed, failed = clear_results(RESULTS_DIR)
+                st.session_state.pop("confirm_clear", None)
+                st.session_state.pop("results", None)
+                st.session_state.pop("results_name", None)
+                if failed:
+                    st.error(f"Removed {removed} files. Could not remove " + ", ".join(failed))
+                else:
+                    # Rerun so the app falls back to its landing page rather than rendering a run
+                    # whose file has just been deleted, and so the picker re-reads the directory.
+                    st.session_state["clear_done"] = f"Removed {removed} files."
+                    st.rerun()
+            if c2.button("Cancel", width="stretch"):
+                st.session_state.pop("confirm_clear", None)
+                st.rerun()
+        st.caption(
+            "The score cache in `.rmi_cache/` is left alone. Scores are deterministic and keyed "
+            "by model id, revision and text, so a cached score is never stale, only expensive to "
+            "rebuild. Results JSON does go stale when the analysis code changes."
+        )
 
 if run_clicked:
     bar = st.progress(0.0, text="starting")
@@ -237,7 +254,7 @@ if run_clicked:
     try:
         with st.spinner(f"Scanning {model_id}"):
             res = run_scan(model_id, depth=depth, probes=tuple(chosen), calibrate=calibrate,
-                           seed=int(seed), verbose=False, progress_cb=cb)
+                           seed=SEED, verbose=False, progress_cb=cb)
     except ModelTooLargeError as exc:
         bar.empty()
         st.error(str(exc), icon=":material/block:")
