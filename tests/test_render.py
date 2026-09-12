@@ -257,10 +257,28 @@ def test_report_is_self_contained(rendered):
     assert not external, external
 
 
-def test_report_carries_every_module_section(rendered):
+def test_a_category_is_named_the_same_way_everywhere(rendered):
+    """The tabs, the tiles and the report's section headings all read `runner.PROBE_TITLE`. They
+    did not always: the tiles printed the raw key, so one of them read "REWARD_HACKING" while its
+    own tab said "Reward hacking"."""
+    from rmi import severity as sv_mod
+    from rmi.runner import PROBES, PROBE_TITLE, probe_heading
+    assert set(PROBE_TITLE) == set(PROBES) == set(sv_mod.CATEGORIES)
     _, html = rendered
-    for heading in ("Where the problems are", "Bias · Identity", "Bias · Sycophancy",
-                    "Bias · Style & length", "Reward hacking", "Appendix"):
+    for probe in PROBES:
+        name = escape(probe_heading(probe))
+        assert f"<h2>{name}</h2>" in html, probe
+        assert f"<h4>{name}</h4>" in html, probe
+        # ... and no tile falls back to the slug, underscore and all.
+        assert f"<h4>{probe}</h4>" not in html, probe
+
+
+def test_report_carries_every_module_section(rendered):
+    """Headings are searched in the raw HTML, so the style one is escaped: its name contains an
+    ampersand, and a heading interpolated unescaped is malformed markup rather than a nicety."""
+    _, html = rendered
+    for heading in ("Where the problems are", "Identity bias", "Sycophancy bias",
+                    "Style &amp; length bias", "Reward hacking", "Appendix"):
         assert heading in html, heading
 
 

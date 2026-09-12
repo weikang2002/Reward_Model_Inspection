@@ -84,6 +84,17 @@ st.markdown("""
          border-radius:0 8px 8px 0; margin-bottom:6px;}
   .yard .big {font-size:23px; font-weight:700; display:block; margin-bottom:3px;}
   .yard {font-size:13px; line-height:1.5; color:#3c3b38;}
+  /* Which scan is on screen. Several result files usually sit side by side and every number
+     below belongs to exactly one of them, so the model name is the second thing after the title
+     rather than the first item in a grey run of metadata. */
+  .scanhead {border-left:4px solid #2a78d6; background:#f4f8fe; border-radius:0 9px 9px 0;
+             padding:9px 16px 10px; margin:-8px 0 18px;}
+  .scanhead .lbl {font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+                  color:#52514e; font-weight:700;}
+  .scanhead .model {font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:17px;
+                    font-weight:700; color:#0b0b0b; margin:1px 0 3px; word-break:break-all;
+                    line-height:1.3;}
+  .scanhead .meta {font-size:12.5px; color:#52514e;}
   .finding {border:1px solid #e6e5e1; border-left-width:4px; border-radius:8px;
             padding:10px 14px; margin-bottom:8px; background:#fcfcfb;}
   .txtbox {background:#f7f7f5; border:1px solid #e6e5e1; border-radius:8px; padding:10px 12px;
@@ -223,18 +234,17 @@ with st.sidebar:
             for probe in members:
                 if st.checkbox(PROBE_LABELS[probe], value=True, key=f"probe_{probe}"):
                     chosen.append(probe)
-    calibrate = st.checkbox("Measure agreement with humans", value=True)
-    st.caption(
-        "Every scan also measures the paraphrase noise floor, the yardstick all findings are "
-        "reported against, so it is not optional. The human-preference check needs a one-off "
-        "dataset download."
-    )
-    depth = st.select_slider("Depth", options=list(PRESETS), value="standard",
-                             format_func=str.capitalize)
-    st.caption(
-        "Quick skips the search for stacked attacks entirely, so it cannot find one. Deep searches "
-        "wider and longer. Scores are cached, so re-runs are near-instant."
-    )
+    # Each fact hangs off the control it is about rather than sitting in a paragraph under both.
+    calibrate = st.checkbox(
+        "Measure agreement with humans", value=True,
+        help="Scores held-out Anthropic/hh-rlhf preference pairs. Needs a one-off dataset "
+             "download the first time.")
+    depth = st.select_slider(
+        "Depth", options=list(PRESETS), value="standard", format_func=str.capitalize,
+        help="Depth sets how many bootstrap and permutation draws each test uses, and how far the "
+             "attack search looks. Deep is wider and slower; scores are cached, so re-running a "
+             "model you have already scanned is near-instant.")
+    st.caption("Quick skips the stacked-attack search, so it cannot find one.")
     run_clicked = st.button("Run scan", type="primary", width="stretch",
                             disabled=not model_id or too_large is not None)
 
@@ -430,13 +440,14 @@ def severity_tiles(sev_map: dict, *, other: dict | None = None,
                             f"{sm.get('n_vulnerabilities', 0)} probes ran; none reached "
                             "significance.")
                     st.markdown(
-                        f'<div class="tile"><h4>{cat}</h4>{band_pill(sm["band"])}'
+                        f'<div class="tile"><h4>{html.escape(probe_heading(cat))}</h4>'
+                        f'{band_pill(sm["band"])}'
                         f'<div class="sub">{body}</div></div>', unsafe_allow_html=True)
                 else:
                     om = other.get(cat, {})
                     a, b = names or ("A", "B")
                     st.markdown(
-                        f'<div class="tile"><h4>{cat}</h4>'
+                        f'<div class="tile"><h4>{html.escape(probe_heading(cat))}</h4>'
                         f'<div class="sub" style="margin:0 0 4px"><b>{html.escape(a)}</b></div>'
                         f'{band_pill(sm["band"])}'
                         f'<div class="sub" style="margin:9px 0 4px"><b>{html.escape(b)}</b></div>'
@@ -495,11 +506,14 @@ severity = sev.summarise_all(R["findings"])
 meta = R["meta"]
 
 st.title("Reward Model Inspection")
-st.caption(
-    f"{meta['model_id']} · {meta['depth']} scan · seed {meta['seed']} · "
-    f"{meta.get('runtime_seconds', 0):.0f}s · "
-    f"{meta.get('provenance', {}).get('device', '?')} · {meta['started']}"
-)
+st.markdown(
+    '<div class="scanhead"><div class="lbl">Results on screen</div>'
+    f'<div class="model">{html.escape(meta["model_id"])}</div>'
+    f'<div class="meta">{html.escape(meta["depth"])} depth · seed {meta["seed"]} · '
+    f'{len(R["findings"])} findings · '
+    f'{html.escape(str(meta.get("provenance", {}).get("device", "?")))} · '
+    f'{meta.get("runtime_seconds", 0):.0f}s · {html.escape(str(meta["started"]))}</div></div>',
+    unsafe_allow_html=True)
 
 if export_clicked and R is not None:
     out = Path(st.session_state.get("results_path")

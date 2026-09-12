@@ -128,7 +128,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     A("<h2>Where the problems are</h2><div class='grid g4'>")
     for cat, s in sev.summarise_all(R["findings"]).items():
         worst_pct = f"{s['severity']:.1f}x" if s.get("severity") is not None else "n/a"
-        A(f"<div class='tile'><h4>{cat}</h4>"
+        A(f"<div class='tile'><h4>{html.escape(probe_heading(cat))}</h4>"
           f"<span class='band' style='background:{viz.BAND_COLOR.get(s['band'], '#8a8a85')}'>"
           f"{html.escape(s['band'])}</span>"
           f"<p><b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> possible "
@@ -209,7 +209,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- identity ---------------------------------------------------------------------
     idr = R.get("identity")
     if idr:
-        A(f"<h2>{probe_heading('identity')}</h2>")
+        A(f"<h2>{html.escape(probe_heading('identity'))}</h2>")
         A(verdict_line(module_items(R, "identity"), "identity",
                        "swapping a name or a descriptor changes the score"))
         A("<h3>Which identities change the score</h3>")
@@ -259,7 +259,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     if sy:
         m = sy["agreement_main_effect"]
         slope = max(sy["insistence_slopes"], key=lambda s: s["mean_delta"])
-        A(f"<h2>{probe_heading('sycophancy')}</h2>")
+        A(f"<h2>{html.escape(probe_heading('sycophancy'))}</h2>")
         A(verdict_line(module_items(R, "sycophancy"), "sycophancy",
                        "the model is rewarded for agreeing rather than correcting"))
         A(_fig(viz.bias_bars(module_items(R, "sycophancy"), signed=True,
@@ -296,7 +296,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- style ------------------------------------------------------------------------
     sm = R.get("style")
     if sm:
-        A(f"<h2>{probe_heading('style')}</h2>")
+        A(f"<h2>{html.escape(probe_heading('style'))}</h2>")
         # The verdict is about the transforms. The filler-versus-information control is a check on
         # the model rather than a transform applied to an answer, so it gets its own section below;
         # the category tile counts both, so the hint says where the rest of its count is.
@@ -383,7 +383,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         winner = max(cands, key=lambda c: (c["asr"] if c["asr"] is not None else -1, c["lift"])) \
             if cands else None
 
-        A(f"<h2>{probe_heading('reward_hacking')}</h2>")
+        A(f"<h2>{html.escape(probe_heading('reward_hacking'))}</h2>")
         if winner:
             works = (winner["asr"] is not None and base_asr is not None
                      and winner["asr"] > base_asr)

@@ -54,29 +54,21 @@ PROBE_LABELS = {
     "style": "Style and length",
     "reward_hacking": "Reward hacking",
 }
-# Shorter forms for places where horizontal room is tight, such as the tab bar.
-PROBE_SHORT = {
-    "identity": "Identity",
-    "sycophancy": "Sycophancy",
-    "style": "Style & length",
+# Display names. The category's own word carries the group, so "Identity bias" needs no "Bias ·"
+# prefix to sit with its siblings in the tab bar, and a tile is not left showing the raw slug
+# "reward_hacking" with its underscore. One mapping feeds the tabs, the tiles and the report's
+# section headings, so those three can never name the same category differently.
+PROBE_TITLE = {
+    "identity": "Identity bias",
+    "sycophancy": "Sycophancy bias",
+    "style": "Style & length bias",
     "reward_hacking": "Reward hacking",
 }
 
 
-def probe_group(probe: str) -> str:
-    """Which group a probe belongs to, so labels cannot drift from the sidebar grouping."""
-    for slug, (_, members) in PROBE_GROUPS.items():
-        if probe in members:
-            return slug
-    raise KeyError(probe)
-
-
 def probe_heading(probe: str) -> str:
-    """Display name that carries the group. A one-member group needs no suffix to disambiguate."""
-    title, members = PROBE_GROUPS[probe_group(probe)]
-    if len(members) == 1:
-        return title
-    return f"{title.split()[0]} · {PROBE_SHORT[probe]}"
+    """Display name for a category, wherever it is named to a reader."""
+    return PROBE_TITLE.get(probe, probe)
 
 # The paraphrase noise floor is not a probe, it is the yardstick every probe is reported against,
 # so it always runs. Without it an effect has no scale, severity bands have nothing to compare to,
