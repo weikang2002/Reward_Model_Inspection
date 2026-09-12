@@ -9,7 +9,6 @@ what it found. Past runs load from results/*.json without needing the model in m
 
 from __future__ import annotations
 
-import difflib
 import html
 import json
 from pathlib import Path
@@ -345,12 +344,6 @@ def severity_tiles(sev_map: dict, *, other: dict | None = None,
                         f'{band_pill(om.get("band", "n/a"))}</div>', unsafe_allow_html=True)
 
 
-def ordinal(n: float) -> str:
-    i = int(round(n))
-    suffix = "th" if 11 <= i % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(i % 10, "th")
-    return f"{i}{suffix}"
-
-
 def band_pill(band: str) -> str:
     return (f'<span class="band" style="background:{viz.BAND_COLOR.get(band, "#8a8a85")}">'
             f'{html.escape(band)}</span>')
@@ -365,9 +358,6 @@ def side_by_side(title_a, text_a, score_a, title_b, text_b, score_b, *, diff=Tru
         with col:
             st.markdown(f"**{t}** · score `{s:+.3f}`")
             st.markdown(f'<div class="txtbox">{body}</div>', unsafe_allow_html=True)
-
-
-INSIST = ["neutral", "expertise", "emotional"]
 
 
 def _length_flip(sm: dict):
@@ -434,7 +424,7 @@ def finding_key(f: dict) -> tuple:
 # --------------------------------------------------------------------------------------
 
 with tabs[0]:
-    st.markdown(overview_verdict(R, noise, cal), unsafe_allow_html=True)
+    st.markdown(overview_verdict(R, cal), unsafe_allow_html=True)
 
     st.markdown("#### What everything below is measured against")
     y1, y2, y3 = st.columns(3)
@@ -478,7 +468,7 @@ with tabs[0]:
     # ---- everything, on one scale -----------------------------------------------------------
     if noise:
         st.markdown("#### Every finding, on one scale")
-        st.plotly_chart(viz.findings_vs_noise(R["findings"], noise), width="stretch",
+        st.plotly_chart(viz.findings_vs_noise(R["findings"]), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
             "Red is a vulnerability, green is the model behaving correctly, blue is a preference "
@@ -521,10 +511,9 @@ with tabs[1]:
     else:
         items = module_items(R, "identity")
         st.markdown(verdict_line(items, "identity",
-                                 "swapping a name or a descriptor changes the score",
-                                 noise=noise), unsafe_allow_html=True)
+                                 "swapping a name or a descriptor changes the score"), unsafe_allow_html=True)
         st.markdown("#### Which identities change the score")
-        st.plotly_chart(viz.bias_bars(items, noise), width="stretch",
+        st.plotly_chart(viz.bias_bars(items), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
             "Each bar is one identity axis: the largest gap it produces between groups, in "
@@ -628,8 +617,7 @@ with tabs[2]:
         by_level = {p["insistence"]: p for p in sy["premium_by_level"]}
 
         st.markdown(verdict_line(items, "sycophancy",
-                                 "the model is rewarded for agreeing rather than correcting",
-                                 noise=noise), unsafe_allow_html=True)
+                                 "the model is rewarded for agreeing rather than correcting"), unsafe_allow_html=True)
 
         # ---- the one chart that answers the module ----------------------------------------
         st.markdown("#### Does agreeing pay more as the user pushes harder?")
@@ -733,8 +721,7 @@ with tabs[3]:
         items = module_items(R, "style", group="content_neutral")
         bearing = module_items(R, "style", group="quality_bearing")
         st.markdown(verdict_line(
-            items, "style", "surface style is rewarded for its own sake", noise=noise,
-            extra="Effects are shown after removing what the extra length alone explains."),
+            items, "style", "surface style is rewarded for its own sake", extra="Effects are shown after removing what the extra length alone explains."),
             unsafe_allow_html=True)
 
         st.markdown("#### Which styles the model rewards")
@@ -745,7 +732,7 @@ with tabs[3]:
             st.markdown("**Style that adds no information**")
             st.caption("Any reward at all here is unearned, so these are bias claims.")
             st.plotly_chart(
-                viz.bias_bars(items, noise, signed=True, xmax=shared_max,
+                viz.bias_bars(items, signed=True, xmax=shared_max,
                               bad_label="rewarded though it adds nothing",
                               good_label="penalised, the model resists it"),
                 width="stretch", config={"displayModeBar": False})
@@ -753,7 +740,7 @@ with tabs[3]:
             st.markdown("**Style that might genuinely improve the answer**")
             st.caption("Rewarding these would not be a fault, so they are preferences, not bias.")
             st.plotly_chart(
-                viz.bias_bars(bearing, noise, signed=True, fault=False, xmax=shared_max),
+                viz.bias_bars(bearing, signed=True, fault=False, xmax=shared_max),
                 width="stretch", config={"displayModeBar": False})
         st.caption(
             f"That is {len(items) + len(bearing)} of the {len(sm['transform_groups'])} transforms "

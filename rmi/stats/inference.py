@@ -163,13 +163,12 @@ def wild_cluster_bootstrap_p(
     """
     values = np.asarray(values, dtype=float)
     codes, uniq = _cluster_index(clusters)
-    G, n = uniq.size, values.size
+    G = uniq.size
     t_obs = values.mean() / (cluster_se_of_mean(values, codes, G) or np.inf)
     rng = np.random.default_rng(seed)
     w = rng.choice([-1.0, 1.0], size=(n_boot, G))
     # Impose the null by recentring, then reweight each cluster's residuals.
     resid = values - values.mean()
-    sums, sizes = _cluster_sums(resid, codes, G)
     stats_null = np.empty(n_boot)
     for b in range(n_boot):
         y = resid * w[b][codes]

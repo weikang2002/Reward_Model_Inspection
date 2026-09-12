@@ -95,13 +95,15 @@ class NoiseFloor:
             if self.pairwise_deltas.size else 0.0
 
     def systematic_bar(self, n_items: int) -> float:
-        """How large a *mean* effect arbitrary wording could fake across ``n_items`` comparisons."""
-        if not n_items or n_items < 1 or self.pairwise_sd == 0:
-            return self.per_comparison_bar
-        return float(1.645 * self.pairwise_sd / np.sqrt(n_items))
+        """How large a *mean* effect arbitrary wording could fake across ``n_items`` comparisons.
 
-    def exceeds_systematic(self, effect: float, n_items: int) -> bool:
-        return abs(effect) > self.systematic_bar(n_items)
+        Infinite when there is no floor to compare against, so a run with no paraphrases reports
+        nothing as material. Falling back to a bar of zero, as this once did, made every effect
+        clear it: a measurement tool with no instrument must fail closed.
+        """
+        if not n_items or n_items < 1 or self.pairwise_sd == 0:
+            return float("inf")
+        return float(1.645 * self.pairwise_sd / np.sqrt(n_items))
 
     @property
     def mean_abs(self) -> float:

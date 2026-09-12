@@ -109,12 +109,6 @@ def _table(rows: list[dict], cols: list[str], *, limit: int = 200) -> str:
            + "".join(body) + f"</tbody></table></div>{more}"
 
 
-def _ordinal(n) -> str:
-    i = int(round(n))
-    suf = "th" if 11 <= i % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(i % 10, "th")
-    return f"{i}{suf}"
-
-
 def build(results: dict, out_path: Path | str) -> Path:
     R = results
     meta, noise, cal = R["meta"], R.get("noise_floor"), R.get("calibration")
@@ -125,7 +119,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     A(f"<h1>Reward Model Inspection</h1>")
     A(f"<p class='sub'>{html.escape(meta['model_id'])} · {meta['depth']} scan · seed "
       f"{meta['seed']} · {meta['started']} · {meta.get('provenance', {}).get('device', '?')}</p>")
-    A(overview_verdict(R, noise or {}, cal))
+    A(overview_verdict(R, cal))
 
     # -- yardsticks -------------------------------------------------------------------
     A("<h2>Read every result against these two numbers</h2><div class='grid g3'>")
@@ -169,7 +163,7 @@ def build(results: dict, out_path: Path | str) -> Path:
 
     if noise:
         A("<h2>Every finding, on one scale</h2>")
-        A(_fig(viz.findings_vs_noise(R["findings"], noise)))
+        A(_fig(viz.findings_vs_noise(R["findings"])))
         A("<p class='sub'>Red is a vulnerability, green is the model behaving correctly, blue is "
           "a preference that may be legitimate. Bars inside the shaded band are no larger than "
           "arbitrary wording would produce at the same sample size.</p>")
@@ -206,9 +200,9 @@ def build(results: dict, out_path: Path | str) -> Path:
     if idr:
         A(f"<h2>{probe_heading('identity')}</h2>")
         A(verdict_line(module_items(R, "identity"), "identity",
-                       "swapping a name or a descriptor changes the score", noise=noise))
+                       "swapping a name or a descriptor changes the score"))
         A("<h3>Which identities change the score</h3>")
-        A(_fig(viz.bias_bars(module_items(R, "identity"), noise)))
+        A(_fig(viz.bias_bars(module_items(R, "identity"))))
         A("<p class='sub'>Each bar is one identity axis: the largest gap it produces between "
           "groups, in otherwise identical templates. Identity bias is non-directional, so a shift "
           "either way counts and only the size is shown. Below, the shaded band is a matched "
@@ -250,15 +244,15 @@ def build(results: dict, out_path: Path | str) -> Path:
         slope = max(sy["insistence_slopes"], key=lambda s: s["mean_delta"])
         A(f"<h2>{probe_heading('sycophancy')}</h2>")
         A(verdict_line(module_items(R, "sycophancy"), "sycophancy",
-                       "the model is rewarded for agreeing rather than correcting", noise=noise))
-        A(_fig(viz.bias_bars(module_items(R, "sycophancy"), noise, signed=True,
+                       "the model is rewarded for agreeing rather than correcting"))
+        A(_fig(viz.bias_bars(module_items(R, "sycophancy"), signed=True,
                              bad_label="favours agreeing",
                              good_label="favours correcting, the right direction")))
         A("<p class='sub'>Above zero the model prefers agreeing with the user; below zero it "
           "prefers correcting them. Each scenario is written in two versions and both are scored; "
           "the premium is their average.</p>")
         A("<h3>Does agreeing pay more as the user pushes harder?</h3>")
-        A(_fig(viz.sycophancy_ladder(sy, noise=noise)))
+        A(_fig(viz.sycophancy_ladder(sy)))
         A("<p class='sub'>Above the line the model prefers agreeing with the user; below it, "
           "correcting them. Each scenario is asked three ways, changing only how hard the user "
           "pushes, never the two answers being compared.</p>")
@@ -288,7 +282,6 @@ def build(results: dict, out_path: Path | str) -> Path:
         A(f"<h2>{probe_heading('style')}</h2>")
         A(verdict_line(
             module_items(R, "style"), "style", "surface style is rewarded for its own sake",
-            noise=noise,
             extra="Only transforms that add no information are charted, since those are the ones "
                   "where any reward at all is unearned. Effects are shown after removing what the "
                   "extra length alone explains."))
@@ -297,13 +290,13 @@ def build(results: dict, out_path: Path | str) -> Path:
         A("<h3>Style that adds no information</h3>")
         A("<p class='sub'>Any reward at all here is unearned, so these are bias claims.</p>")
         _smax = max([i["ratio"] for i in _neutral + _bearing if i.get("ratio")] + [1.0]) * 1.28
-        A(_fig(viz.bias_bars(_neutral, noise, signed=True, xmax=_smax,
+        A(_fig(viz.bias_bars(_neutral, signed=True, xmax=_smax,
                              bad_label="rewarded though it adds nothing",
                              good_label="penalised, the model resists it")))
         A("<h3>Style that might genuinely improve the answer</h3>")
         A("<p class='sub'>Rewarding these would not be a fault, so they are preferences, not "
           "bias.</p>")
-        A(_fig(viz.bias_bars(_bearing, noise, signed=True, fault=False, xmax=_smax)))
+        A(_fig(viz.bias_bars(_bearing, signed=True, fault=False, xmax=_smax)))
         A(f"<p class='sub'>That is {len(_neutral) + len(_bearing)} of the "
           f"{len(sm['transform_groups'])} transforms applied. The eleventh, <b>padding</b>, is not "
           "charted because it <i>is</i> the ruler: content-free filler at four intensities is what "

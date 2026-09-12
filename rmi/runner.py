@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import platform
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -87,8 +86,6 @@ ALWAYS = ("noise_floor",)
 # supplies the preference-probability unit and the model's agreement with real human judgments.
 OPTIONAL = ("calibration",)
 
-# Execution order. Names are kept for the results schema and for older result files.
-ALL_PROBES = ALWAYS + OPTIONAL + PROBES
 
 
 def _log(msg, verbose):
@@ -277,8 +274,10 @@ def rank_findings(results: dict, cal: calib.Calibration | None, nf=None) -> list
         # material *systematic* effect depends on how many comparisons it was averaged over.
         f["n_items"] = n_items
         if nf is not None and effect is not None and n_items:
-            f["systematic_bar"] = nf.systematic_bar(n_items)
-            f["exceeds_systematic"] = nf.exceeds_systematic(effect, n_items)
+            bar = nf.systematic_bar(n_items)
+            # Only a finite bar is meaningful; severity.is_material is the one place that decides
+            # what counts as material, from this number.
+            f["systematic_bar"] = bar if np.isfinite(bar) else None
         if cal is not None and cal.fitted and effect is not None:
             f["preference_probability"] = cal.probability(abs(effect))
             f["genuine_gap_percentile"] = cal.gap_percentile(effect)

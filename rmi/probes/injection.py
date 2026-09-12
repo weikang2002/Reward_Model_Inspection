@@ -155,8 +155,7 @@ def run(
         for p in ASR_PERCENTILES:
             r[f"beats_p{p}"] = bool(r["score"] > th[p]) if r["question_id"] in ref_ok else None
 
-    summary = _summarise(rows, affixes, refs, ref_ok, n_boot=n_boot, seed=seed,
-                         noise_floor=noise_floor)
+    summary = _summarise(rows, affixes, n_boot=n_boot, seed=seed, noise_floor=noise_floor)
 
     # Without this, an attack success rate has nothing to be a success *over*.
     test_ids = {q["id"] for q in test}
@@ -180,7 +179,7 @@ def run(
     beam = None
     if beam_depth > 0:
         beam = _beam_search(
-            scorer, dev, test, affixes, generic, refs, ref_ok, ref_thresholds,
+            scorer, dev, test, affixes, generic, ref_ok, ref_thresholds,
             depth=beam_depth, width=beam_width,
             n_dev_q=beam_dev_questions, n_dev_b=beam_dev_bases,
             seed=seed, progress=progress,
@@ -301,7 +300,7 @@ def _top_exploits(rows, summary, corpus, generic, affixes, ref_thresholds, ref_o
     return out[:max_attacks]
 
 
-def _summarise(rows, affixes, refs, ref_ok, *, n_boot, seed, noise_floor):
+def _summarise(rows, affixes, *, n_boot, seed, noise_floor):
     """Rank every affix on the development prompts, then report its held-out numbers.
 
     Ranking on the same data you report is the winner's curse: the best of ~80 candidates is
@@ -367,7 +366,7 @@ def _summarise(rows, affixes, refs, ref_ok, *, n_boot, seed, noise_floor):
     return {"affixes": out, "neutral_control_lift": neutral_lift}
 
 
-def _beam_search(scorer, dev, test, affixes, generic, refs, ref_ok, ref_thresholds,
+def _beam_search(scorer, dev, test, affixes, generic, ref_ok, ref_thresholds,
                  *, depth, width, n_dev_q, n_dev_b, seed, progress):
     """Greedy beam search stacking affix fragments, fitted on dev and reported on test.
 

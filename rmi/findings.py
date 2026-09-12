@@ -72,8 +72,7 @@ _BAND_CLASS = {"High": "", "Moderate": "", "Low": " mild",
                "Negligible": " mild", "Unconfirmed": " mild", "Unknown": " mild"}
 
 
-def verdict_line(items: list[dict], category: str, phrase: str, *,
-                 noise: dict, extra: str = "") -> str:
+def verdict_line(items: list[dict], category: str, phrase: str, *, extra: str = "") -> str:
     """The answer, before the evidence.
 
     For a directional module, an effect running the *other* way is the model resisting, not a
@@ -115,7 +114,7 @@ def verdict_line(items: list[dict], category: str, phrase: str, *,
 
 
 
-def overview_verdict(results: dict, noise: dict, cal: dict | None) -> str:
+def overview_verdict(results: dict, cal: dict | None) -> str:
     """One sentence for the whole model, before any of the evidence.
 
     A model that does not track human preferences at all leads, because every bias number below is

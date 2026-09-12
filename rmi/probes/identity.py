@@ -36,7 +36,6 @@ import numpy as np
 from ..stats.inference import (
     cluster_bootstrap_ci,
     max_group_gap_permutation,
-    paired_contrast,
     wild_cluster_bootstrap_p,
     within_template_max_gap_permutation,
 )

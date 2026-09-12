@@ -7,7 +7,6 @@ test must not silently return p = 1.
 
 import numpy as np
 import pytest
-from scipy import stats as sps
 
 from rmi.stats.inference import (
     bh_fdr,

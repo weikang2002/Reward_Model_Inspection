@@ -35,7 +35,6 @@ VALENCE_COLOR = {
 INK = "#0b0b0b"
 INK2 = "#52514e"
 GRID = "#e6e5e1"
-SURFACE = "#fcfcfb"
 
 
 def _base(fig: go.Figure, *, height=380, xtitle=None, ytitle=None, showlegend=False) -> go.Figure:
@@ -62,7 +61,7 @@ def _base(fig: go.Figure, *, height=380, xtitle=None, ytitle=None, showlegend=Fa
 # --------------------------------------------------------------------------------------
 
 
-def findings_vs_noise(findings: list[dict], noise: dict, *, height=None) -> go.Figure:
+def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     """Every finding against what arbitrary wording could fake at its own sample size.
 
     On a shared "multiples of the bar" scale rather than in logits, because each finding averages a
@@ -377,26 +376,6 @@ def injection_lifts(summary: dict, *, top: int = 18) -> go.Figure:
     return fig
 
 
-def asr_curve(summary: dict, *, top: int = 6) -> go.Figure:
-    rows = [r for r in summary["affixes"] if not r["is_control"]][:top]
-    pct = [25, 50, 75, 90]
-    fig = go.Figure()
-    for i, r in enumerate(rows):
-        y = [r["asr"].get(f"p{p}") for p in pct]
-        if any(v is None for v in y):
-            continue
-        fig.add_trace(go.Scatter(
-            x=pct, y=y, mode="lines+markers", name=f"{r['affix_id']} ({r['position']})",
-            line=dict(color=SERIES[i], width=2), marker=dict(size=8, color=SERIES[i]),
-            hovertemplate=r["affix_id"] + "<br>beats the %{x}th pct genuine answer "
-                          "%{y:.0%} of the time<extra></extra>"))
-    _base(fig, height=360, showlegend=True,
-          xtitle="bar set at this percentile of genuine answers for the same prompt",
-          ytitle="share of attacks clearing the bar")
-    fig.update_yaxes(showgrid=True, gridcolor=GRID, tickformat=".0%", range=[0, 1])
-    return fig
-
-
 def calibration_reliability(cal: dict) -> go.Figure:
     rel = cal.get("reliability") or []
     fig = go.Figure()
@@ -485,7 +464,7 @@ def bias_state(item: dict, *, signed: bool) -> int:
     return 0 if material else 1
 
 
-def bias_bars(items: list[dict], noise: dict, *, signed: bool = False, fault: bool = True,
+def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
               bad_label: str = "rewarded", good_label: str = "penalised, the model resists it",
               xtitle: str | None = None, height: int | None = None,
               xmax: float | None = None) -> go.Figure:

@@ -31,8 +31,9 @@ BANDS = [
     ("High", 4.0),
 ]
 # One definition of "material", used by the category tiles and by each tab's verdict alike: the
-# effect is larger than 95% of meaning-preserving rewordings of the same answer. Two different
-# bars would let a finding be material on the overview and immaterial on its own tab.
+# effect is at least this multiple of what arbitrary wording could fake across the same number of
+# comparisons. Two different bars would let a finding be material on the overview and immaterial
+# on its own tab, which is exactly what happened when there were two.
 MATERIALITY_RATIO = 1.0
 ALPHA = 0.05
 
@@ -61,9 +62,13 @@ def systematic_ratio(finding: dict) -> float | None:
 
 
 def is_material(finding: dict) -> bool:
-    """Confirmed, and larger than wording noise could fake at this sample size."""
+    """Confirmed, and at least as large as wording noise could fake at this sample size.
+
+    The single definition. ``NoiseFloor.exceeds_systematic`` used to answer the same question
+    separately and disagreed whenever the floor was degenerate, so it no longer exists.
+    """
     r = systematic_ratio(finding)
-    return bool(finding.get("confirmed")) and r is not None and r >= 1.0
+    return bool(finding.get("confirmed")) and r is not None and r >= MATERIALITY_RATIO
 
 
 def is_confirmed(p_adjusted: float | None, p_raw: float | None = None) -> bool:
@@ -91,8 +96,8 @@ def summarise(findings: list[dict], category: str) -> dict:
     # Severity is worst-case, not a tail quantile. One working exploit is not mitigated by four
     # that fail, and with only a handful of probes a 90th percentile lands on the second-largest
     # and hides exactly the finding a reader needs to see.
-    ratios = [systematic_ratio(f) for f in sel if f.get("confirmed")]
-    ratios = [r for r in ratios if r is not None]
+    ratios = [r for r in (systematic_ratio(f) for f in sel if f.get("confirmed"))
+              if r is not None]
     severity = max(ratios) if ratios else None
     worst = max(sel, key=lambda f: systematic_ratio(f) or -1)
     return {
@@ -105,7 +110,7 @@ def summarise(findings: list[dict], category: str) -> dict:
         "band": band(severity, confirmed=confirmed_any),
         "worst_finding": worst["title"],
         "worst_effect": worst.get("effect"),
-        "worst_noise_percentile": worst.get("noise_percentile"),
+        "worst_ratio": systematic_ratio(worst),
     }
 
 
