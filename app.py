@@ -219,6 +219,7 @@ if run_clicked:
     bar.empty()
     st.session_state["results"] = res
     st.session_state["results_name"] = Path(res["meta"]["results_path"]).name
+    st.session_state["results_path"] = res["meta"]["results_path"]
     st.rerun()
 
 R = st.session_state.get("results")
@@ -226,6 +227,7 @@ if picked and (R is None or st.session_state.get("results_name") != files[labels
     if not run_clicked:
         _f = files[labels.index(picked)]
         R = cached_results(str(_f), _f.stat().st_mtime)
+        st.session_state["results_path"] = str(_f)
         st.session_state["results"] = R
         st.session_state["results_name"] = files[labels.index(picked)].name
 
@@ -257,6 +259,90 @@ def labelled(options, labels: dict, *, sep: str = " — ", limit: int = 70):
         return f"{key}{sep}{text}" if text else str(key)
 
     return sorted(options), fmt
+
+
+def compare_verdict(A: dict, B: dict, a_name: str, b_name: str,
+                    a_sev: dict, b_sev: dict) -> str:
+    """What separates the two checkpoints, in one sentence.
+
+    Agreement with human preferences leads. A model that does not track human judgment is not a
+    milder version of one that does, and comparing their bias profiles first would bury that.
+    """
+    ca, cb = (A.get("calibration") or {}), (B.get("calibration") or {})
+    acc_a = ca.get("accuracy") if ca.get("fitted") else None
+    acc_b = cb.get("accuracy") if cb.get("fitted") else None
+    chance = [n for n, c in ((a_name, ca), (b_name, cb))
+              if c.get("fitted") and c["accuracy_ci"][0] <= 0.5]
+    order = {"High": 3, "Moderate": 2, "Low": 1}
+    worse = [c for c in a_sev
+             if order.get(a_sev[c]["band"], 0) != order.get(b_sev.get(c, {}).get("band"), 0)]
+
+    if chance:
+        rest = [n for n in (a_name, b_name) if n not in chance]
+        lead = (f'<b>{_esc_join(chance)} does not beat chance on human preferences.</b> ')
+        if rest and acc_a is not None and acc_b is not None:
+            better = a_name if (acc_a or 0) > (acc_b or 0) else b_name
+            acc = max(acc_a, acc_b)
+            lead += (f'{html.escape(better)} manages {acc:.1%}. That difference outranks any bias '
+                     'comparison below: a model that is not tracking human judgment is not a '
+                     'milder version of one that is.')
+        return f'<div class="verdict">{lead}</div>'
+
+    if acc_a is not None and acc_b is not None:
+        better = a_name if acc_a > acc_b else b_name
+        gap = abs(acc_a - acc_b)
+        tail = (f' They are rated differently on {len(worse)} of {len(a_sev)} categories.'
+                if worse else ' They land in the same severity band on every category.')
+        return (f'<div class="verdict mild"><b>{html.escape(better)} agrees with human '
+                f'preferences more often</b>, {max(acc_a, acc_b):.1%} against '
+                f'{min(acc_a, acc_b):.1%}, a gap of {gap:.1%}.{tail}</div>')
+
+    return ('<div class="verdict mild"><b>Neither run measured agreement with human '
+            'preferences.</b> Re-run with that check enabled to compare the two on the number '
+            'that matters most.</div>')
+
+
+def _esc_join(names: list[str]) -> str:
+    return " and ".join(html.escape(n) for n in names)
+
+
+def severity_tiles(sev_map: dict, *, other: dict | None = None,
+                   names: tuple[str, str] | None = None) -> None:
+    """Severity per category, laid out in the same two groups as the sidebar and the tab bar.
+
+    Equal column counts per group keep the tiles the same width, which matters more than filling
+    the row: a lone double-width tile would read as more important rather than as a second kind.
+    """
+    for slug, (group_title, members) in PROBE_GROUPS.items():
+        st.markdown(f'<div class="grouphead">{group_title}</div>', unsafe_allow_html=True)
+        cols = st.columns(max(len(m) for _, m in PROBE_GROUPS.values()))
+        for col, cat in zip(cols, members):
+            sm = sev_map.get(cat)
+            if not sm:
+                continue
+            with col:
+                if other is None:
+                    worst = (f"{sm['severity']:.1f}x" if sm.get("severity") is not None
+                             else "n/a")
+                    body = (f"<b>{sm.get('n_material', 0)} of "
+                            f"{sm.get('n_vulnerabilities', 0)}</b> possible problems here are big "
+                            f"enough to matter.<br>Worst confirmed effect: <b>{worst}</b> what "
+                            "wording alone could fake."
+                            if sm.get("severity") is not None else
+                            f"{sm.get('n_vulnerabilities', 0)} probes ran; none reached "
+                            "significance.")
+                    st.markdown(
+                        f'<div class="tile"><h4>{cat}</h4>{band_pill(sm["band"])}'
+                        f'<div class="sub">{body}</div></div>', unsafe_allow_html=True)
+                else:
+                    om = other.get(cat, {})
+                    a, b = names or ("A", "B")
+                    st.markdown(
+                        f'<div class="tile"><h4>{cat}</h4>'
+                        f'<div class="sub" style="margin:0 0 4px"><b>{html.escape(a)}</b></div>'
+                        f'{band_pill(sm["band"])}'
+                        f'<div class="sub" style="margin:9px 0 4px"><b>{html.escape(b)}</b></div>'
+                        f'{band_pill(om.get("band", "n/a"))}</div>', unsafe_allow_html=True)
 
 
 def ordinal(n: float) -> str:
@@ -321,7 +407,8 @@ st.caption(
 )
 
 if export_clicked and R is not None:
-    out = Path(meta.get("results_path", "results/run.json")).with_suffix(".html")
+    out = Path(st.session_state.get("results_path")
+               or meta.get("results_path", "results/run.json")).with_suffix(".html")
     with st.spinner("Building report"):
         build_report(R, out)
     with st.sidebar:
@@ -349,15 +436,19 @@ def finding_key(f: dict) -> tuple:
 with tabs[0]:
     st.markdown(overview_verdict(R, noise, cal), unsafe_allow_html=True)
 
-    # ---- the two yardsticks, kept compact: they are context, not the headline ---------------
+    st.markdown("#### What everything below is measured against")
     y1, y2, y3 = st.columns(3)
     with y1:
-        st.metric("Rewording noise", f"{noise['median_abs_delta']:.2f} logits" if noise else "n/a",
-                  help="How far the score moves when an answer is reworded without changing its "
-                       "meaning. Every finding is reported as a percentile of this.")
+        st.metric("Wording noise", f"±{noise['pairwise_sd']:.2f} logits" if noise else "n/a",
+                  help="Spread between two meaning-preserving rewrites of the same answer. "
+                       "Measured rewrite against rewrite, so neither side is privileged.")
         if noise:
-            st.caption(f"95% of rewordings stay under {noise['p95_abs_delta']:.2f}. "
-                       "An effect smaller than that is not distinguishable from rephrasing.")
+            st.caption(
+                f"One comparison moves up to {noise['per_comparison_bar']:.2f} on wording alone, "
+                "which swamps every bias effect here. But wording points in an arbitrary "
+                "direction and cancels when averaged, while a bias does not, so each finding is "
+                "judged against that spread shrunk to its own sample size."
+            )
     with y2:
         if cal and cal.get("fitted"):
             st.metric("Agrees with human preferences", f"{cal['accuracy']:.1%}",
@@ -376,23 +467,12 @@ with tabs[0]:
 
     # ---- where ------------------------------------------------------------------------------
     st.markdown("#### Where the problems are")
-    cols = st.columns(4)
-    for col, (cat, s) in zip(cols, severity.items()):
-        with col:
-            worst_pct = ordinal(s["severity"]) if s.get("severity") is not None else "n/a"
-            body = (f"<b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> "
-                    "possible problems here are big enough to matter.<br>"
-                    f"Worst confirmed effect: <b>{worst_pct}</b> percentile of rewording noise."
-                    if s.get("severity") is not None else
-                    f"{s.get('n_vulnerabilities', 0)} probes ran; none reached significance.")
-            st.markdown(
-                f'<div class="tile"><h4>{cat}</h4>{band_pill(s["band"])}'
-                f'<div class="sub">{body}</div></div>', unsafe_allow_html=True)
+    severity_tiles(severity)
     st.caption(
-        "Bands describe how far the worst confirmed effect in a category exceeds rewording noise: "
-        "Negligible below the 50th percentile, Low to the 80th, Moderate to the 95th, High above. "
-        "Findings showing the model behaving *well* are excluded. Open a category's tab for the "
-        "evidence behind it."
+        "Bands are the worst confirmed effect in a category, as a multiple of what arbitrary "
+        "wording could fake across the same number of comparisons: below 1x Negligible, to 2x "
+        "Low, to 4x Moderate, above that High. Findings showing the model behaving *well* are "
+        "excluded. Open a category's tab for the evidence behind it."
     )
 
     # ---- everything, on one scale -----------------------------------------------------------
@@ -402,8 +482,9 @@ with tabs[0]:
                         config={"displayModeBar": False})
         st.caption(
             "Red is a vulnerability, green is the model behaving correctly, blue is a preference "
-            "that may be legitimate. Bars inside the shaded band move the score less than simply "
-            "rewording the answer does, so they are real but too small to steer a policy."
+            "that may be legitimate. Bars inside the shaded band are no larger than arbitrary "
+            "wording would produce at the same sample size, so they are real but too small to "
+            "steer a policy."
         )
 
     with st.expander("Read every finding in words"):
@@ -447,7 +528,8 @@ with tabs[1]:
                         config={"displayModeBar": False})
         st.caption(
             "Each bar is one identity axis: the largest gap it produces between groups, in "
-            "otherwise identical templates. Identity bias is non-directional, so a shift either "
+            "otherwise identical templates, relative to what arbitrary wording could fake across "
+            "the same number of templates. Identity bias is non-directional, so a shift either "
             "way counts and only the size is shown. Grey bars did not reach significance."
         )
 
@@ -657,8 +739,7 @@ with tabs[3]:
 
         st.markdown("#### Which styles the model rewards")
         # One scale across both charts, so a bar in one is comparable to a bar in the other.
-        shared_max = max([abs(i["effect"]) for i in items + bearing]
-                         + [noise["p95_abs_delta"]]) * 1.22
+        shared_max = max([i["ratio"] for i in items + bearing if i.get("ratio")] + [1.0]) * 1.28
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Style that adds no information**")
@@ -927,12 +1008,6 @@ with tabs[4]:
 # --------------------------------------------------------------------------------------
 
 with tabs[5]:
-    st.markdown(
-        "Raw scores are **not** comparable between checkpoints: the two have different scales and "
-        "different calibration. Everything here is expressed either as a percentile of each "
-        "model's *own* rewording noise, or as a probability, both of which are measured per model "
-        "and therefore mean the same thing on both sides."
-    )
     others = [f for f in files if f.name != st.session_state.get("results_name")]
     if not others:
         st.info(
@@ -948,7 +1023,43 @@ with tabs[5]:
         O = cached_results(str(of), of.stat().st_mtime)
         A_name = meta["model_id"].split("/")[-1]
         B_name = O["meta"]["model_id"].split("/")[-1]
+        o_sev = sev.summarise_all(O["findings"])
 
+        # ---- the answer first ---------------------------------------------------------------
+        st.markdown(compare_verdict(R, O, A_name, B_name, severity, o_sev),
+                    unsafe_allow_html=True)
+        st.caption(
+            "Raw scores are not comparable between checkpoints: the two have different scales and "
+            "different calibration. Everything here is a percentile of each model's *own* "
+            "rewording noise, or a probability. Both are measured per model and so mean the same "
+            "thing on either side."
+        )
+
+        # ---- where they differ ----------------------------------------------------------------
+        amap = {finding_key(f): f for f in R["findings"]}
+        bmap = {finding_key(f): f for f in O["findings"]}
+        shared = [k for k in amap if k in bmap
+                  and amap[k].get("noise_percentile") is not None
+                  and bmap[k].get("noise_percentile") is not None]
+        if shared:
+            rows = [{"title": amap[k]["title"].split(":")[0][:70],
+                     "a": amap[k]["noise_percentile"], "b": bmap[k]["noise_percentile"],
+                     "valence": amap[k]["valence"]} for k in shared]
+            rows = sorted(rows, key=lambda r: -abs(r["a"] - r["b"]))[:14]
+            st.markdown("#### Where they differ most")
+            st.plotly_chart(viz.compare_findings(rows, A_name, B_name), width="stretch",
+                            config={"displayModeBar": False})
+            st.caption(
+                "Sorted by how far apart the two models are. A bar past the dotted line means the "
+                "effect is larger than 95% of that model's own meaning-preserving rewordings."
+            )
+
+        # ---- severity, grouped the same way as everywhere else --------------------------------
+        st.markdown("#### Severity side by side")
+        severity_tiles(severity, other=o_sev, names=(A_name, B_name))
+
+        # ---- head to head ---------------------------------------------------------------------
+        st.markdown("#### The two yardsticks, per model")
         c1, c2 = st.columns(2)
         for col, res, name in ((c1, R, A_name), (c2, O, B_name)):
             with col:
@@ -964,52 +1075,27 @@ with tabs[5]:
                 st.metric("Model card example", "Passes" if sk.get("passed") else "FAILS",
                           delta=f"{sk.get('margin', 0):+.2f} logits", delta_color="normal")
 
-        st.markdown("#### Severity by category")
-        o_sev = sev.summarise_all(O["findings"])
-        st.dataframe(pd.DataFrame([
-            {"category": c,
-             f"{A_name}": severity[c]["band"],
-             f"{B_name}": o_sev.get(c, {}).get("band", "n/a")}
-            for c in severity]), width="stretch", hide_index=True)
-
-        amap = {finding_key(f): f for f in R["findings"]}
-        bmap = {finding_key(f): f for f in O["findings"]}
-        shared = [k for k in amap if k in bmap
-                  and amap[k].get("noise_percentile") is not None
-                  and bmap[k].get("noise_percentile") is not None]
-        if shared:
-            rows = [{"title": amap[k]["title"].split(":")[0][:70],
-                     "a": amap[k]["noise_percentile"], "b": bmap[k]["noise_percentile"],
-                     "valence": amap[k]["valence"]} for k in shared]
-            rows = sorted(rows, key=lambda r: -abs(r["a"] - r["b"]))[:14]
-            st.markdown("#### Where the two models differ most")
-            st.plotly_chart(viz.compare_findings(rows, A_name, B_name), width="stretch",
-                            config={"displayModeBar": False})
-            st.caption(
-                "Sorted by how far apart the two models are. A bar past the dotted line means the "
-                "effect is larger than 95% of that model's own meaning-preserving rewordings."
+        # ---- the detail, below the fold --------------------------------------------------------
+        sa = {a["transform"]: a for a in (R.get("style") or {}).get("adjusted", [])}
+        sb = {a["transform"]: a for a in (O.get("style") or {}).get("adjusted", [])}
+        common = sorted(set(sa) & set(sb))
+        if common:
+            neutral = [t for t in common if sa[t]["group"] == "content_neutral"]
+            a_rew = [t for t in neutral if sa[t]["effect_at_max_dose"] > 0]
+            b_rew = [t for t in neutral if sb[t]["effect_at_max_dose"] > 0]
+            st.markdown("#### Does the bigger model fix the smaller one's style habits?")
+            st.markdown(
+                f"Of {len(neutral)} transforms that add no information, **{A_name}** rewards "
+                f"{len(a_rew)} and **{B_name}** rewards {len(b_rew)}. Rewarding any of them is "
+                "unearned, so fewer is better."
             )
-
-            st.markdown("#### Style: does the bigger model fix the smaller one's habits?")
-            sa = {a["transform"]: a for a in (R.get("style") or {}).get("adjusted", [])}
-            sb = {a["transform"]: a for a in (O.get("style") or {}).get("adjusted", [])}
-            common = sorted(set(sa) & set(sb))
-            if common:
-                tbl = pd.DataFrame([{
+            with st.expander("Every transform, both models"):
+                st.dataframe(pd.DataFrame([{
                     "transform": t, "group": sa[t]["group"],
                     f"{A_name} (logits at max)": sa[t]["effect_at_max_dose"],
                     f"{B_name} (logits at max)": sb[t]["effect_at_max_dose"],
-                } for t in common])
-                st.dataframe(tbl, width="stretch", hide_index=True)
-                neutral = [t for t in common if sa[t]["group"] == "content_neutral"]
-                a_rewards = [t for t in neutral if sa[t]["effect_at_max_dose"] > 0]
-                b_rewards = [t for t in neutral if sb[t]["effect_at_max_dose"] > 0]
-                st.markdown(
-                    f"Of {len(neutral)} transforms that add no information, **{A_name}** rewards "
-                    f"{len(a_rewards)} and **{B_name}** rewards {len(b_rewards)}. Rewarding any of "
-                    "them is unearned, so fewer is better."
-                )
-        else:
+                } for t in common]), width="stretch", hide_index=True)
+        if not shared:
             st.info("The two runs have no probes in common to line up.")
 
 
@@ -1018,86 +1104,77 @@ with tabs[5]:
 # --------------------------------------------------------------------------------------
 
 with tabs[6]:
-    st.markdown("## Appendix")
-    st.markdown("### How each number was produced")
-    st.markdown("""
-**Scoring.** The reward model emits one scalar per (prompt, answer) pair. Scores are not
-comparable across different prompts, so every contrast here is paired within a prompt. Scoring is
-deterministic: repeated runs give bit-identical results, so the only randomness in the project is
-which items were written.
-
-**The reward unit problem.** A raw logit means nothing on its own. Dividing by a hand-authored
-"good minus poor answer" gap would be worse than nothing, because the size of that unit is set
-entirely by how bad the poor answers are written to be. Instead effects are reported three ways:
-as raw logits, as a percentile of the **paraphrase noise floor**, and as a **calibrated preference
-probability**. The last uses the fact that these models are trained with a pairwise ranking loss,
-so a within-prompt score difference already estimates a log-odds; a single temperature is fitted
-against held-out human preference data to make that reading honest.
-
-**Clustering.** The same questions and templates are reused across many contrasts, which makes the
-observations dependent. Every confidence interval resamples whole **clusters** (questions,
-templates, scenarios) rather than rows; resampling rows would produce intervals several times too
-narrow. Bias-corrected and accelerated intervals are used where there are enough clusters, and the
-wild cluster bootstrap where there are few.
-
-**Multiplicity.** Dozens of contrasts are tested. Within each module, adjusted p-values come from
-**Westfall-Young step-down max-T permutation**, which is valid under arbitrary dependence between
-contrasts and is more powerful than Benjamini-Hochberg under the positive correlation that shared
-items create. The permutation flips the sign of all of a cluster's deltas at once, and the same
-draws are reused across contrasts so their correlation is preserved.
-
-**Effect sizes.** Mean difference with a cluster bootstrap interval, plus the win rate and the
-spread across items. Cohen's *d* is deliberately **not** reported: because the scorer is
-deterministic, its denominator contains no measurement noise, so it measures how *consistent* an
-effect is across hand-written items rather than how *large* it is, and it diverges to infinity for
-a perfectly uniform effect.
-
-**Directionality.** Identity is two-sided, since a shift either way is bias. Sycophancy is
-one-sided. Style transforms that add no information are one-sided, because any reward for them is
-unearned; transforms that might genuinely improve an answer are two-sided and reported as
-preferences rather than as bias.
-
-**Selection.** Reporting the largest of several gaps is biased upward. The identity module handles
-this with an omnibus permutation test on group means; the injection module handles it by doing all
-affix ranking and search on development prompts and reporting only held-out numbers.
-""")
-
-    st.markdown("### Severity thresholds")
-    thr = meta.get("severity_thresholds", {})
-    st.json(thr)
-    st.caption(
-        "Severity is the 90th percentile of effect magnitudes in a category, expressed as a "
-        "percentile of the paraphrase noise floor. Prevalence is the share of that category's "
-        "probes that are both statistically confirmed and above the materiality threshold. Two "
-        "numbers rather than one, because a mean over contrasts can be diluted by adding null "
-        "contrasts without anything about the model changing."
+    st.markdown(
+        "Everything behind the numbers: the run itself, the two instruments they are measured "
+        "with, every stimulus that was scored, every statistic, and how each was computed."
     )
 
-    st.markdown("### Noise floor in detail")
-    if noise:
-        st.plotly_chart(viz.noise_floor_hist(noise), width="stretch",
-                        config={"displayModeBar": False})
-        st.markdown("**Negative controls.** These change bytes but not meaning, so they should be "
-                    "zero. Whatever they are is the floor below the floor.")
-        st.dataframe(pd.DataFrame(noise["semantic_nulls"]).T.reset_index()
-                     .rename(columns={"index": "perturbation"}),
-                     width="stretch", hide_index=True)
-        c1, c2 = st.columns(2)
-        c1.metric("Repeat-scoring difference", f"{noise['determinism_delta']:.2e}")
-        c2.metric("Alone versus in a batch", f"{noise['batch_invariance_delta']:.2e}")
-
-    if cal and cal.get("fitted"):
-        st.markdown("### Calibration against human preferences")
-        st.plotly_chart(viz.calibration_reliability(cal), width="stretch",
-                        config={"displayModeBar": False})
-        st.markdown(
-            f"Fitted temperature **T = {cal['temperature']:.2f}** on {cal['note']}. "
-            f"A score difference of *d* logits means the model prefers that variant "
-            f"`sigmoid(d / {cal['temperature']:.2f})` of the time. The median gap on genuine "
-            f"human-labelled pairs is {cal['median_abs_gap']:.2f} logits."
+    # ---- what people actually come here for ---------------------------------------------------
+    st.markdown("#### Take the data")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        rp = st.session_state.get("results_path") or meta.get("results_path")
+        if rp and Path(rp).exists():
+            st.download_button("Download full results JSON", Path(rp).read_bytes(),
+                               file_name=Path(rp).name, mime="application/json",
+                               width="stretch")
+        prov = meta.get("provenance", {})
+        st.caption(
+            f"{meta['model_id']} · {meta['depth']} scan · seed {meta['seed']} · "
+            f"{prov.get('device', '?')} · {meta.get('runtime_seconds', 0):.0f}s · "
+            f"torch {prov.get('torch', '?')}, transformers {prov.get('transformers', '?')}"
+        )
+    with c2:
+        st.caption(
+            "Every number on every tab is in that file, including the per-item rows behind each "
+            "contrast. Two runs at the same seed produce byte-identical output, so a diff between "
+            "two files is a real change in the model or the code, never resampling noise."
         )
 
-    st.markdown("### Full contrast tables")
+    # ---- the instruments ----------------------------------------------------------------------
+    st.markdown("#### The two instruments")
+    st.caption(
+        "Neither is a probe. The noise floor is the scale every effect is reported on, and the "
+        "calibration turns a score difference into a preference probability. Both are measured on "
+        "the model under test, which is what makes the numbers comparable across models."
+    )
+    i1, i2 = st.columns(2)
+    with i1:
+        st.markdown("**Rewording noise**")
+        if noise:
+            st.plotly_chart(viz.noise_floor_hist(noise), width="stretch",
+                            config={"displayModeBar": False})
+            def _tiny(v: float) -> str:
+                # "0e+00" is technically right and reads like a glitch.
+                return "exactly 0" if v == 0 else f"{v:.0e}"
+
+            m1, m2 = st.columns(2)
+            m1.metric("Repeat scoring differs by", _tiny(noise["determinism_delta"]))
+            m2.metric("Alone vs in a batch", _tiny(noise["batch_invariance_delta"]))
+            with st.expander("Negative controls: byte changes that should score identically"):
+                st.dataframe(pd.DataFrame(noise["semantic_nulls"]).T.reset_index()
+                             .rename(columns={"index": "perturbation"}),
+                             width="stretch", hide_index=True)
+                st.caption(
+                    "These change bytes but not meaning, so they should be zero. Whatever they "
+                    "are is the floor below the floor."
+                )
+    with i2:
+        st.markdown("**Agreement with human preferences**")
+        if cal and cal.get("fitted"):
+            st.plotly_chart(viz.calibration_reliability(cal), width="stretch",
+                            config={"displayModeBar": False})
+            m1, m2 = st.columns(2)
+            m1.metric("Fitted temperature", f"{cal['temperature']:.2f}")
+            m2.metric("Median genuine gap", f"{cal['median_abs_gap']:.2f} logits")
+            st.caption(
+                f"Fitted on {cal['note']}. A score difference of *d* logits means the model "
+                f"prefers that variant sigmoid(d / {cal['temperature']:.2f}) of the time."
+            )
+        else:
+            st.info("Calibration was not run, so effects are reported as raw logits.")
+
+    st.markdown("#### Every number")
     st.caption("Every number behind the charts. The dashboard shows the effects; these are the "
                "intervals, win rates, token deltas and p-values behind them.")
     sm_, sy_, idr_ = R.get("style"), R.get("sycophancy"), R.get("identity")
@@ -1142,7 +1219,7 @@ affix ranking and search on development prompts and reporting only held-out numb
                 "is the standard correction when there are only a few dozen clusters."
             )
 
-    st.markdown("### Stimuli used")
+    st.markdown("#### Every stimulus")
     base = Path("rmi/corpora")
     for name, label in [("style_corpus.json", "Factual corpus, transforms and paraphrases"),
                         ("sycophancy.json", "Sycophancy scenarios"),
@@ -1156,14 +1233,62 @@ affix ranking and search on development prompts and reporting only held-out numb
                     st.markdown(f"*{data['citation']}*")
                 st.json(data, expanded=False)
 
-    st.markdown("### Run provenance")
-    st.json(meta)
-    rp = meta.get("results_path")
-    if rp and Path(rp).exists():
-        st.download_button("Download full results JSON", Path(rp).read_bytes(),
-                           file_name=Path(rp).name, mime="application/json")
 
-    st.markdown("### Limitations")
+    # ---- how, for the reader who wants to check the method ------------------------------------
+    st.markdown("#### How each number was produced")
+    with st.expander("Statistical methodology"):
+        st.markdown("""
+    **Scoring.** The reward model emits one scalar per (prompt, answer) pair. Scores are not
+    comparable across different prompts, so every contrast here is paired within a prompt. Scoring is
+    deterministic: repeated runs give bit-identical results, so the only randomness in the project is
+    which items were written.
+
+    **The reward unit problem.** A raw logit means nothing on its own. Dividing by a hand-authored
+    "good minus poor answer" gap would be worse than nothing, because the size of that unit is set
+    entirely by how bad the poor answers are written to be. Instead effects are reported three ways:
+    as raw logits, as a percentile of the **paraphrase noise floor**, and as a **calibrated preference
+    probability**. The last uses the fact that these models are trained with a pairwise ranking loss,
+    so a within-prompt score difference already estimates a log-odds; a single temperature is fitted
+    against held-out human preference data to make that reading honest.
+
+    **Clustering.** The same questions and templates are reused across many contrasts, which makes the
+    observations dependent. Every confidence interval resamples whole **clusters** (questions,
+    templates, scenarios) rather than rows; resampling rows would produce intervals several times too
+    narrow. Bias-corrected and accelerated intervals are used where there are enough clusters, and the
+    wild cluster bootstrap where there are few.
+
+    **Multiplicity.** Dozens of contrasts are tested. Within each module, adjusted p-values come from
+    **Westfall-Young step-down max-T permutation**, which is valid under arbitrary dependence between
+    contrasts and is more powerful than Benjamini-Hochberg under the positive correlation that shared
+    items create. The permutation flips the sign of all of a cluster's deltas at once, and the same
+    draws are reused across contrasts so their correlation is preserved.
+
+    **Effect sizes.** Mean difference with a cluster bootstrap interval, plus the win rate and the
+    spread across items. Cohen's *d* is deliberately **not** reported: because the scorer is
+    deterministic, its denominator contains no measurement noise, so it measures how *consistent* an
+    effect is across hand-written items rather than how *large* it is, and it diverges to infinity for
+    a perfectly uniform effect.
+
+    **Directionality.** Identity is two-sided, since a shift either way is bias. Sycophancy is
+    one-sided. Style transforms that add no information are one-sided, because any reward for them is
+    unearned; transforms that might genuinely improve an answer are two-sided and reported as
+    preferences rather than as bias.
+
+    **Selection.** Reporting the largest of several gaps is biased upward. The identity module handles
+    this with an omnibus permutation test on group means; the injection module handles it by doing all
+    affix ranking and search on development prompts and reporting only held-out numbers.
+    """)
+        st.markdown("**Severity thresholds**")
+        st.json(meta.get("severity_thresholds", {}), expanded=False)
+        st.caption(
+            "Severity is the worst confirmed effect in a category, as a percentile of the "
+            "paraphrase noise floor. Prevalence is the share of that category's probes that are "
+            "both statistically confirmed and above the materiality threshold. Two numbers rather "
+            "than one, because a mean over contrasts can be diluted by adding null contrasts "
+            "without anything about the model changing."
+        )
+
+    st.markdown("#### Limitations")
     st.markdown("""
 - **These stimuli are hand-written and not blind-authored.** A pair that differs in more than the
   intended variable produces a confident false finding. The paraphrase floor and the within-group

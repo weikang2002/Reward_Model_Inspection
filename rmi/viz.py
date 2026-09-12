@@ -63,37 +63,37 @@ def _base(fig: go.Figure, *, height=380, xtitle=None, ytitle=None, showlegend=Fa
 
 
 def findings_vs_noise(findings: list[dict], noise: dict, *, height=None) -> go.Figure:
-    """Each finding's magnitude against the distribution of meaning-preserving rewordings.
+    """Every finding against what arbitrary wording could fake at its own sample size.
 
-    This is the chart that makes the report honest. Anything to the left of the shaded band moves
-    the score less than simply rewording the answer does.
+    On a shared "multiples of the bar" scale rather than in logits, because each finding averages a
+    different number of comparisons and so has a different bar. Anything left of 1.0 is the size
+    wording noise alone would produce.
     """
-    sel = [f for f in findings if f.get("effect") is not None][:16]
-    sel = sorted(sel, key=lambda f: abs(f["effect"]))
+    sel = [f for f in findings
+           if f.get("effect") is not None and f.get("systematic_bar")]
+    sel = sorted(sel, key=lambda f: abs(f["effect"]) / f["systematic_bar"])[-16:]
     labels = [(f["title"][:66] + "...") if len(f["title"]) > 66 else f["title"] for f in sel]
-    vals = [abs(f["effect"]) for f in sel]
+    vals = [abs(f["effect"]) / f["systematic_bar"] for f in sel]
     colors = [VALENCE_COLOR.get(f.get("valence"), INK2) for f in sel]
     fig = go.Figure()
-    med, p95 = noise["median_abs_delta"], noise["p95_abs_delta"]
-    fig.add_vrect(x0=0, x1=med, fillcolor="#8a8a85", opacity=0.10, line_width=0,
-                  annotation_text="below typical rewording noise", annotation_position="top left",
-                  annotation_font=dict(size=11, color=INK2))
-    fig.add_vrect(x0=med, x1=p95, fillcolor="#8a8a85", opacity=0.05, line_width=0)
-    fig.add_vline(x=p95, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=p95, y=len(sel) - 0.4, text="95th pct of rewording noise",
+    fig.add_vrect(x0=0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
+    fig.add_vline(x=1, line=dict(color="#8a8a85", width=2, dash="dot"))
+    fig.add_annotation(x=1, y=len(sel) - 0.4, text="what wording alone could fake",
                        showarrow=False, xanchor="left", xshift=6,
                        font=dict(size=11, color=INK2))
     for lab, v, c, f in zip(labels, vals, colors, sel):
         fig.add_trace(go.Bar(
             y=[lab], x=[v], orientation="h", marker=dict(color=c), width=0.62,
-            hovertemplate=f"<b>{f['valence']}</b><br>effect %{{x:.2f}} logits"
-                          f"<br>band: {f['band']}<extra></extra>",
-            showlegend=False,
-        ))
+            customdata=[[f["valence"], f["effect"], f["systematic_bar"], f.get("n_items") or 0]],
+            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:+.2f} logits"
+                          "<br>%{x:.1f}x the bar of %{customdata[2]:.2f}"
+                          " over %{customdata[3]} comparisons<extra></extra>",
+            showlegend=False))
     fig.update_traces(marker_cornerradius=4)
     _base(fig, height=height or max(300, 34 * len(sel) + 90),
-          xtitle="effect size, absolute logits")
+          xtitle="size relative to what arbitrary wording could fake (1.0 = the bar)")
     fig.update_yaxes(tickfont=dict(size=11, color=INK))
+    fig.update_xaxes(range=[0, max(vals + [1.0]) * 1.12])
     return fig
 
 
@@ -451,15 +451,15 @@ def compare_findings(rows: list[dict], label_a: str, label_b: str) -> go.Figure:
 
 # Identity is non-directional: a shift either way is bias, so magnitude is the whole story.
 UNSIGNED_STATES = [
-    ("clears rewording noise", STATUS["critical"]),
-    ("real, but within rewording noise", STATUS["warning"]),
+    ("bigger than wording could fake", STATUS["critical"]),
+    ("real, but no bigger than wording", STATUS["warning"]),
     ("not statistically confirmed", "#9a9a95"),
 ]
 # Style and sycophancy are directional: only one direction is a fault. Being pushed the *other*
 # way is the model resisting, and colouring that like a vulnerability would be a lie.
 SIGNED_STATES = [
-    ("{bad}, and clears rewording noise", STATUS["critical"]),
-    ("{bad}, but within rewording noise", STATUS["warning"]),
+    ("{bad}, bigger than wording could fake", STATUS["critical"]),
+    ("{bad}, but no bigger than wording", STATUS["warning"]),
     ("{good}", STATUS["good"]),
     ("not statistically confirmed", "#9a9a95"),
 ]
@@ -474,9 +474,10 @@ PREFERENCE_STATES = [
 
 
 def bias_state(item: dict, *, signed: bool) -> int:
+    """Colour state. Materiality is the ratio to the item's own bar, not a global percentile."""
     if not item.get("confirmed"):
         return 3 if signed else 2
-    material = (item.get("noise_percentile") or 0) >= 95
+    material = bool(item.get("material"))
     if not signed:
         return 0 if material else 1
     if (item.get("effect") or 0) <= 0:
@@ -488,58 +489,63 @@ def bias_bars(items: list[dict], noise: dict, *, signed: bool = False, fault: bo
               bad_label: str = "rewarded", good_label: str = "penalised, the model resists it",
               xtitle: str | None = None, height: int | None = None,
               xmax: float | None = None) -> go.Figure:
-    """Every probe in one module, ranked, against that model's own rewording noise.
+    """Every probe in one module, against what arbitrary wording could fake at its own sample size.
 
-    This is the "where is the bias" view. The eye should land on the longest red bar and be done;
-    everything below it is the evidence.
+    Plotted as a multiple of that bar rather than in raw logits. Each probe averages a different
+    number of comparisons, so each has a different bar, and one shaded band in logits would be
+    wrong for most of the rows. On this scale 1.0 is the bar itself and every row is comparable,
+    across modules and across models.
 
     In signed mode the bar's side of zero carries the direction, so a transform the model pushes
     *against* reads as green on the left rather than as a large red vulnerability.
     """
-    key = (lambda r: r["effect"] or 0) if signed else (lambda r: abs(r["effect"] or 0))
+    items = [r for r in items if r.get("ratio") is not None]
+    if not items:
+        fig = go.Figure()
+        _base(fig, height=height or 200, xtitle="no probe in this module reported a sample size")
+        return fig
+    key = (lambda r: (r["ratio"] if (r["effect"] or 0) > 0 else -r["ratio"])) if signed \
+        else (lambda r: r["ratio"])
     items = sorted(items, key=key)
     labels = [r["label"] for r in items]
-    vals = [(r["effect"] or 0) if signed else abs(r["effect"] or 0) for r in items]
+    vals = [key(r) for r in items]
+    states = [bias_state(r, signed=signed) for r in items]
     if fault:
         palette = SIGNED_STATES if signed else UNSIGNED_STATES
-        states = [bias_state(r, signed=signed) for r in items]
         names = [n.format(bad=bad_label, good=good_label) for n, _ in palette]
     else:
         palette = PREFERENCE_STATES
         states = [0 if r.get("confirmed") else 1 for r in items]
         names = [n for n, _ in palette]
+
     fig = go.Figure()
-
-    med, p95 = noise["median_abs_delta"], noise["p95_abs_delta"]
-    lo = -p95 if signed else 0
-    fig.add_vrect(x0=-med if signed else 0, x1=med, fillcolor="#8a8a85", opacity=0.12, line_width=0)
-    fig.add_vrect(x0=lo, x1=p95, fillcolor="#8a8a85", opacity=0.06, line_width=0)
-    for x in ([p95, -p95] if signed else [p95]):
+    fig.add_vrect(x0=-1 if signed else 0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
+    for x in ([1, -1] if signed else [1]):
         fig.add_vline(x=x, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=p95, y=len(items) - 0.35, text="rewording noise ends here",
-                       showarrow=False, xanchor="right", xshift=-7,
+    fig.add_annotation(x=1, y=len(items) - 0.35, text="what wording alone could fake",
+                       showarrow=False, xanchor="left", xshift=6,
                        font=dict(size=11, color=INK2))
-
     fig.add_trace(go.Bar(
         y=labels, x=vals, orientation="h", width=0.6, showlegend=False,
         marker=dict(color=[palette[st][1] for st in states]),
-        text=[f"{v:+.2f}" if signed else f"{v:.2f}" for v in vals],
-        textposition="outside", textfont=dict(size=12, color=INK),
-        customdata=[[r.get("detail_text", ""), names[st]] for r, st in zip(items, states)],
-        hovertemplate="<b>%{y}</b><br>%{x:+.2f} logits<br>%{customdata[1]}"
-                      "<br>%{customdata[0]}<extra></extra>"))
+        text=[f"{abs(v):.1f}x" for v in vals], textposition="outside",
+        textfont=dict(size=12, color=INK),
+        customdata=[[r.get("detail_text", ""), names[st], r["effect"],
+                     r.get("systematic_bar") or 0, r.get("n_items") or 0]
+                    for r, st in zip(items, states)],
+        hovertemplate="<b>%{y}</b><br>%{customdata[2]:+.2f} logits"
+                      "<br>%{x:.1f}x the bar of %{customdata[3]:.2f}"
+                      " over %{customdata[4]} comparisons"
+                      "<br>%{customdata[1]}<br>%{customdata[0]}<extra></extra>"))
     for st, name in enumerate(names):
         if st in states:
             fig.add_trace(go.Bar(y=[labels[0]], x=[None], orientation="h", name=name,
                                  marker=dict(color=palette[st][1]), width=0.6, hoverinfo="skip"))
     fig.update_traces(marker_cornerradius=4)
     _base(fig, height=height or max(260, 40 * len(items) + 110), showlegend=True,
-          xtitle=xtitle or "how far the score moves, logits")
+          xtitle=xtitle or "size relative to what arbitrary wording could fake (1.0 = the bar)")
     fig.update_yaxes(tickfont=dict(size=12.5, color=INK))
-    # An explicit xmax lets two charts shown side by side share a scale. Without it their bar
-    # lengths are not comparable even though both are in logits.
-    span = xmax if xmax is not None else \
-        max(abs(min(vals + [0])), abs(max(vals + [0])), p95) * 1.22
+    span = xmax if xmax is not None else max(max(abs(v) for v in vals), 1.0) * 1.28
     fig.update_xaxes(range=[-span, span] if signed else [0, span])
     return fig
 

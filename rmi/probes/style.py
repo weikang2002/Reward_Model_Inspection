@@ -321,6 +321,7 @@ def _padding_vs_elaboration(arms, baseline, *, n_boot, seed, noise_floor):
         )
         row = res.as_dict()
         row["rows"] = detail
+        row["n_items"] = len(detail)
         row["mean_length_mismatch"] = float(np.mean(
             [abs(r["elaboration_added_tokens"] - r["padding_added_tokens"]) for r in detail]))
         if noise_floor is not None:

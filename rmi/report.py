@@ -130,10 +130,12 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- yardsticks -------------------------------------------------------------------
     A("<h2>Read every result against these two numbers</h2><div class='grid g3'>")
     if noise:
-        A(f"<div class='yard'><span class='big'>{noise['median_abs_delta']:.2f} logits</span>"
-          "typical score change from <b>rewording an answer without changing its meaning</b>. "
-          f"The 95th percentile is {noise['p95_abs_delta']:.2f}. An effect smaller than this is "
-          "not distinguishable from rephrasing.</div>")
+        A(f"<div class='yard'><span class='big'>±{noise['pairwise_sd']:.2f} logits</span>"
+          "spread between two <b>meaning-preserving rewrites</b> of the same answer. One "
+          f"comparison moves up to {noise['per_comparison_bar']:.2f} on wording alone, which "
+          "swamps every bias effect here. But wording points in an arbitrary direction and cancels "
+          "when averaged, while a bias does not, so each finding is judged against that spread "
+          "shrunk to its own sample size.</div>")
     if cal and cal.get("fitted"):
         A(f"<div class='yard'><span class='big'>{cal['accuracy']:.1%}</span>"
           "of the time this model agrees with <b>real human preference judgments</b> "
@@ -153,24 +155,24 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- severity ---------------------------------------------------------------------
     A("<h2>Where the problems are</h2><div class='grid g4'>")
     for cat, s in sev.summarise_all(R["findings"]).items():
-        worst_pct = _ordinal(s["severity"]) if s.get("severity") is not None else "n/a"
+        worst_pct = f"{s['severity']:.1f}x" if s.get("severity") is not None else "n/a"
         A(f"<div class='tile'><h4>{cat}</h4>"
           f"<span class='band' style='background:{viz.BAND_COLOR.get(s['band'], '#8a8a85')}'>"
           f"{html.escape(s['band'])}</span>"
           f"<p><b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> possible "
           "problems here are big enough to matter.<br>Worst confirmed effect: "
-          f"<b>{worst_pct}</b> percentile of rewording noise.</p></div>")
-    A("</div><p class='sub'>Bands describe how far the <i>worst confirmed</i> effect in a "
-      "category exceeds rewording noise: Negligible below the 50th percentile, Low to the 80th, "
-      "Moderate to the 95th, High above. Findings showing the model behaving <i>well</i> are "
-      "excluded.</p>")
+          f"<b>{worst_pct}</b> what wording alone could fake.</p></div>")
+    A("</div><p class='sub'>Bands are the <i>worst confirmed</i> effect in a category, as a "
+      "multiple of what arbitrary wording could fake across the same number of comparisons: below "
+      "1x Negligible, to 2x Low, to 4x Moderate, above that High. Findings showing the model "
+      "behaving <i>well</i> are excluded.</p>")
 
     if noise:
         A("<h2>Every finding, on one scale</h2>")
         A(_fig(viz.findings_vs_noise(R["findings"], noise)))
-        A("<p class='sub'>Red is a vulnerability, green is the model behaving correctly, blue is a "
-          "preference that may be legitimate. Bars inside the shaded band move the score less than "
-          "simply rewording the answer does.</p>")
+        A("<p class='sub'>Red is a vulnerability, green is the model behaving correctly, blue is "
+          "a preference that may be legitimate. Bars inside the shaded band are no larger than "
+          "arbitrary wording would produce at the same sample size.</p>")
 
     # -- findings ---------------------------------------------------------------------
     A("<h2>Ranked findings</h2>")
@@ -294,8 +296,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         _bearing = module_items(R, "style", group="quality_bearing")
         A("<h3>Style that adds no information</h3>")
         A("<p class='sub'>Any reward at all here is unearned, so these are bias claims.</p>")
-        _smax = max([abs(i["effect"]) for i in _neutral + _bearing]
-                    + [noise["p95_abs_delta"]]) * 1.22
+        _smax = max([i["ratio"] for i in _neutral + _bearing if i.get("ratio")] + [1.0]) * 1.28
         A(_fig(viz.bias_bars(_neutral, noise, signed=True, xmax=_smax,
                              bad_label="rewarded though it adds nothing",
                              good_label="penalised, the model resists it")))

@@ -17,6 +17,7 @@ Two instruments:
 
 from __future__ import annotations
 
+import itertools
 import json
 import unicodedata
 from dataclasses import dataclass, field
@@ -44,10 +45,27 @@ SEMANTIC_NULLS = {
 
 @dataclass
 class NoiseFloor:
-    """The resolution limit of the instrument, and the yardstick for every reported effect."""
+    """The resolution limit of the instrument, and the yardstick for every reported effect.
+
+    Two bars, because there are two questions and they have opposite answers here.
+
+    *Per comparison*: could this effect decide a single head-to-head? Wording variation is large
+    and swamps most bias effects, so the honest answer is usually no.
+
+    *Systematically*: would this effect survive being averaged over many comparisons, the way a
+    policy gradient accumulates during RLHF? Wording noise points in an arbitrary direction and
+    cancels as 1/sqrt(n); a bias points the same way every time and does not. The two bars can
+    therefore disagree about the same number, and only the second speaks to RLHF impact.
+
+    The spread is measured **paraphrase against paraphrase**, not paraphrase against the original.
+    Rewrites score systematically lower than the text they were derived from (see
+    ``rewrite_penalty``), and folding that constant into the bar inflates it while adding nothing
+    that shrinks with sample size.
+    """
 
     abs_deltas: np.ndarray  # |score(paraphrase) - score(neutral)| pooled over questions
     signed_deltas: np.ndarray
+    pairwise_deltas: np.ndarray  # paraphrase minus paraphrase, the symmetric measure
     per_question: dict
     semantic_nulls: dict
     determinism_delta: float
@@ -55,6 +73,35 @@ class NoiseFloor:
     n_questions: int
     n_paraphrases: int
     extra: dict = field(default_factory=dict)
+
+    @property
+    def rewrite_penalty(self) -> float:
+        """Mean signed cost of being a rewrite at all.
+
+        Cannot be cleanly attributed: the model may prefer the exact original wording, or the
+        hand-written paraphrases may simply be slightly worse. Reported, not used as a bar.
+        """
+        return float(np.mean(self.signed_deltas))
+
+    @property
+    def pairwise_sd(self) -> float:
+        """Spread of a single arbitrary wording difference, free of the rewrite penalty."""
+        return float(np.std(self.pairwise_deltas, ddof=1)) if self.pairwise_deltas.size > 1 else 0.0
+
+    @property
+    def per_comparison_bar(self) -> float:
+        """How far wording alone moves one comparison, 95% of the time."""
+        return float(np.percentile(np.abs(self.pairwise_deltas), 95)) \
+            if self.pairwise_deltas.size else 0.0
+
+    def systematic_bar(self, n_items: int) -> float:
+        """How large a *mean* effect arbitrary wording could fake across ``n_items`` comparisons."""
+        if not n_items or n_items < 1 or self.pairwise_sd == 0:
+            return self.per_comparison_bar
+        return float(1.645 * self.pairwise_sd / np.sqrt(n_items))
+
+    def exceeds_systematic(self, effect: float, n_items: int) -> bool:
+        return abs(effect) > self.systematic_bar(n_items)
 
     @property
     def mean_abs(self) -> float:
@@ -90,6 +137,10 @@ class NoiseFloor:
 
     def summary(self) -> dict:
         return {
+            "pairwise_deltas": self.pairwise_deltas.tolist(),
+            "pairwise_sd": self.pairwise_sd,
+            "per_comparison_bar": self.per_comparison_bar,
+            "rewrite_penalty": self.rewrite_penalty,
             "mean_abs_delta": self.mean_abs,
             "median_abs_delta": self.median_abs,
             "p95_abs_delta": self.p95_abs,
@@ -129,12 +180,14 @@ def run(scorer, corpus: dict | None = None, *, verbose: bool = False) -> NoiseFl
     main = dict(zip(index, scores[: len(pairs)]))
     nulls = dict(zip(null_index, scores[len(pairs) :]))
 
-    per_q, abs_all, signed_all = {}, [], []
+    per_q, abs_all, signed_all, pairwise = {}, [], [], []
     for q in questions:
         base = main[(q["id"], "neutral")]
         d = [main[(q["id"], f"para{i}")] - base for i in range(len(q["paraphrases"]))]
         signed_all.extend(d)
         abs_all.extend(abs(x) for x in d)
+        # Both sides are rewrites, so neither is privileged and the rewrite penalty cancels.
+        pairwise.extend(a - b for a, b in itertools.combinations([base + x for x in d], 2))
         per_q[q["id"]] = {
             "neutral_score": base,
             "paraphrase_scores": [base + x for x in d],
@@ -163,6 +216,7 @@ def run(scorer, corpus: dict | None = None, *, verbose: bool = False) -> NoiseFl
     nf = NoiseFloor(
         abs_deltas=np.array(abs_all),
         signed_deltas=np.array(signed_all),
+        pairwise_deltas=np.array(pairwise),
         per_question=per_q,
         semantic_nulls=null_summary,
         determinism_delta=abs(solo - again),

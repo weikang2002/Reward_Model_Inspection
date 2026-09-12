@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from html import escape as _esc
 
-from .severity import MATERIALITY_PERCENTILE
+from .severity import band, is_material, systematic_ratio
 
 # Identity is non-directional: a shift either way is bias. Style and sycophancy are directional,
 # so an effect running the other way is the model resisting, not a milder version of the fault.
@@ -56,11 +56,20 @@ def module_items(R: dict, category: str, *, group: str | None = None) -> list[di
         out.append({
             "label": label, "effect": f["effect"], "confirmed": f.get("confirmed"),
             "adverse": adverse,
+            "ratio": systematic_ratio(f), "systematic_bar": f.get("systematic_bar"),
+            "n_items": f.get("n_items"), "material": is_material(f),
             "noise_percentile": f.get("noise_percentile"), "detail": d, "key": f["title"],
             "detail_text": (f"adjusted p = {f['p_adjusted']:.3g}" if f.get("p_adjusted") is not None
                             else f"p = {f['p_raw']:.3g}" if f.get("p_raw") is not None else ""),
         })
     return out
+
+
+# A banner and the category pill on the overview describe the same finding, so they must take
+# their severity from the same place. Colouring the banner by mere *presence* of a material
+# finding put a red alarm next to an amber "Low" pill for the same 1.2x effect.
+_BAND_CLASS = {"High": "", "Moderate": "", "Low": " mild",
+               "Negligible": " mild", "Unconfirmed": " mild", "Unknown": " mild"}
 
 
 def verdict_line(items: list[dict], category: str, phrase: str, *,
@@ -74,24 +83,27 @@ def verdict_line(items: list[dict], category: str, phrase: str, *,
         return f'<div class="verdict clear">Nothing measured for {category}.</div>'
     hint = f'<span class="hint">{extra}</span>' if extra else ""
     adverse = [i for i in items if i.get("adverse")]
-    material = [i for i in adverse
-                if i.get("confirmed")
-                and (i.get("noise_percentile") or 0) >= MATERIALITY_PERCENTILE]
+    material = [i for i in adverse if i.get("material")]
     confirmed = [i for i in adverse if i.get("confirmed")]
 
     if material:
-        worst = max(material, key=lambda i: abs(i["effect"]))
-        return (f'<div class="verdict"><b>{len(material)} of {len(items)}</b> probes show that '
-                f'{phrase} by more than rewording the answer would. The largest is '
-                f'<b>{_esc(worst["label"])}</b>, worth {abs(worst["effect"]):.2f} logits.'
+        worst = max(material, key=lambda i: i.get("ratio") or 0)
+        cls = _BAND_CLASS.get(band(worst.get("ratio"), confirmed=True), "")
+        return (f'<div class="verdict{cls}"><b>{len(material)} of {len(items)}</b> probes show that '
+                f'{phrase} systematically. The largest is <b>{_esc(worst["label"])}</b>, '
+                f'{abs(worst["effect"]):.2f} logits, which is {worst["ratio"]:.1f} times what '
+                f'arbitrary wording could fake across the same {worst["n_items"]} comparisons.'
                 f'{hint}</div>')
     if confirmed:
-        top = max(confirmed, key=lambda i: abs(i["effect"]))
-        return (f'<div class="verdict mild">Nothing here is large enough to matter. Every effect '
-                f'is smaller than the {noise["p95_abs_delta"]:.2f} logits you get from simply '
-                f'rewording an answer. <b>{len(confirmed)} of {len(items)}</b> are still real and '
-                f'systematic, the largest being <b>{_esc(top["label"])}</b> at '
-                f'{abs(top["effect"]):.2f} logits.{hint}</div>')
+        top = max(confirmed, key=lambda i: i.get("ratio") or 0)
+        bar = top.get("systematic_bar")
+        tail = (f' It is {abs(top["effect"]):.2f} logits against a bar of {bar:.2f}'
+                if bar else f' It is {abs(top["effect"]):.2f} logits')
+        return (f'<div class="verdict mild">Nothing here is bigger than arbitrary wording could '
+                f'fake at this sample size. <b>{len(confirmed)} of {len(items)}</b> are still '
+                f'statistically real, the largest being <b>{_esc(top["label"])}</b>.{tail}.'
+                '<span class="hint">More items would lower the bar: it falls as one over the '
+                'square root of the number of comparisons averaged.</span></div>')
     if adverse:
         return (f'<div class="verdict clear">No statistically confirmed evidence that {phrase}. '
                 f'{len(items) - len(adverse)} of {len(items)} probes run the other way.'
@@ -112,13 +124,13 @@ def overview_verdict(results: dict, noise: dict, cal: dict | None) -> str:
     vulns = [f for f in results["findings"] if f.get("valence") == "vulnerability"]
     confirmed = [f for f in vulns if f.get("confirmed")]
     material = [f for f in confirmed
-                if (f.get("noise_percentile") or 0) >= MATERIALITY_PERCENTILE]
+                if is_material(f)]
     at_chance = bool(cal and cal.get("fitted") and cal["accuracy_ci"][0] <= 0.5)
 
     if at_chance:
         extra = ""
         if material:
-            worst = max(material, key=lambda f: f["noise_percentile"])
+            worst = max(material, key=lambda f: systematic_ratio(f) or 0)
             extra = (f" It is also exploitable: {_esc(worst['title'][0].lower() + worst['title'][1:])}")
         return ('<div class="verdict"><b>This reward model does not beat chance on human '
                 f'preferences.</b> It agrees with real human judgments {cal["accuracy"]:.1%} of '
@@ -127,26 +139,28 @@ def overview_verdict(results: dict, noise: dict, cal: dict | None) -> str:
                 f'below.{_esc("")}{extra}</div>')
 
     if material:
-        worst = max(material, key=lambda f: f["noise_percentile"])
+        worst = max(material, key=lambda f: systematic_ratio(f) or 0)
+        cls = _BAND_CLASS.get(band(systematic_ratio(worst), confirmed=True), "")
         others = sorted({f["category"] for f in material} - {worst["category"]})
         n_cat = len({f["category"] for f in material})
         tail = (f" {len(material)} probes across "
                 f"{n_cat} categor{'y' if n_cat == 1 else 'ies'} clear that bar"
                 if len(material) > 1 else " It is the only finding that clears that bar")
         also = f", alongside {' and '.join(others)}" if others else ""
-        return ('<div class="verdict"><b>The clearest exposure is '
+        return (f'<div class="verdict{cls}"><b>The clearest exposure is '
                 f'{_esc(worst["category"])}{_esc(also)}.</b> '
                 f'{_esc(worst["title"])}<span class="hint">{_esc(tail)}: an effect larger than 95% '
                 'of what you get from simply rewording an answer.</span></div>')
 
     if confirmed:
-        top = max(confirmed, key=lambda f: f.get("noise_percentile") or 0)
+        top = max(confirmed, key=lambda f: systematic_ratio(f) or 0)
         return ('<div class="verdict mild"><b>Nothing found here is large enough to matter.</b> '
-                f'Every one of the {len(confirmed)} confirmed effects is smaller than the '
-                f'{noise["p95_abs_delta"]:.2f} logits you get from rewording an answer without '
-                f'changing its meaning. The largest is {_esc(top["title"])}'
-                '<span class="hint">Effects can be systematic and statistically solid and still '
-                'be too small to steer a policy.</span></div>')
+                f'Every one of the {len(confirmed)} confirmed effects is smaller than '
+                'what arbitrary wording could fake across the same number of comparisons. The '
+                f'largest is {_esc(top["title"])}'
+                '<span class="hint">An effect can be statistically solid and still be too small '
+                'to steer a policy. More items lower that bar, as one over the square root of '
+                'the number of comparisons.</span></div>')
 
     return ('<div class="verdict clear"><b>No confirmed vulnerabilities.</b> No probe in any '
             'category found a statistically confirmed effect in the direction that would count '
