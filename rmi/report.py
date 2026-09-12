@@ -16,7 +16,8 @@ from . import methodology
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
-from .findings import module_items, overview_verdict, self_check, tone_check, verdict_line
+from .findings import (module_items, overview_verdict, self_check, substance_check,
+                       tone_check, verdict_line)
 from .textdiff import word_diff
 
 CSS = """
@@ -146,7 +147,10 @@ def build(results: dict, out_path: Path | str) -> Path:
                   if f.get("effect") is not None and f.get("systematic_bar")]
         A(f"<p class='sub'>The {min(len(scored), viz.MAX_ROWS)} largest of {len(scored)} findings, "
           "each labelled with the category it came from. Bars inside the shaded band are no "
-          "larger than rewording alone would produce at the same sample size.</p>")
+          "larger than rewording alone would produce at the same sample size. A tile counts a "
+          "finding only if it is a vulnerability, clears the line <i>and</i> is statistically "
+          "confirmed; hatched red bars fail that last test, and green and blue ones are not "
+          "faults at all.</p>")
 
     # -- yardsticks, after the problems they calibrate ----------------------------------
     A("<h2>The two yardsticks every number above is measured against</h2>"
@@ -293,22 +297,28 @@ def build(results: dict, out_path: Path | str) -> Path:
     sm = R.get("style")
     if sm:
         A(f"<h2>{probe_heading('style')}</h2>")
+        # The verdict is about the transforms. The filler-versus-information control is a check on
+        # the model rather than a transform applied to an answer, so it gets its own section below;
+        # the category tile counts both, so the hint says where the rest of its count is.
+        _check = module_items(R, "style", group="quality_control")
         A(verdict_line(
-            module_items(R, "style"), "style", "surface style is rewarded for its own sake",
+            module_items(R, "style", group="content_neutral") + _check, "style",
+            "surface style is rewarded for its own sake",
             extra="Only transforms that add no information are charted, since those are the ones "
                   "where any reward at all is unearned. Effects are shown after removing what the "
-                  "extra length alone explains."))
+                  "extra length alone explains. The substance check counts here too; it is not a "
+                  "transform, so it is not one of the bars but a section of its own below."))
         _neutral = module_items(R, "style", group="content_neutral")
         _bearing = module_items(R, "style", group="quality_bearing")
         A("<h3>Style that adds no information</h3>")
-        A("<p class='sub'>Any reward at all here is unearned, so these are bias claims.</p>")
+        A("<p class='sub'>Same answer, repackaged, so any reward here is a fault.</p>")
         _smax = max([i["ratio"] for i in _neutral + _bearing if i.get("ratio")] + [1.0]) * 1.28
         A(_fig(viz.bias_bars(_neutral, signed=True, xmax=_smax,
                              bad_label="rewarded though it adds nothing",
                              good_label="penalised, the model resists it")))
         A("<h3>Style that might genuinely improve the answer</h3>")
-        A("<p class='sub'>Rewarding these would not be a fault, so they are preferences, not "
-          "bias.</p>")
+        A("<p class='sub'>These change the answer itself, so a reward can be deserved: "
+          "preferences, not faults.</p>")
         A(_fig(viz.bias_bars(_bearing, signed=True, fault=False, xmax=_smax)))
         A(f"<p class='sub'>That is {len(_neutral) + len(_bearing)} of the "
           f"{len(sm['transform_groups'])} transforms applied. The eleventh, <b>padding</b>, is not "
@@ -316,21 +326,26 @@ def build(results: dict, out_path: Path | str) -> Path:
           "traces the reward-versus-length curve below, and every effect above is measured against "
           "that curve.</p>")
         # Findings first. Everything about length is methodology, so it goes last, consolidated.
-        pv = sm.get("padding_vs_elaboration", [])
-        if pv:
-            b = pv[0]
-            good = b["mean_delta"] > 0
-            A("<h3>Does it read substance, or count tokens?</h3>")
-            A(f"<div class='note {'good' if good else 'warn'}'>"
-              "Both arms add the same number of tokens, matched to within "
-              f"{b['mean_length_mismatch']:.0f}. One adds genuine new information, the other "
-              "content-free filler. "
-              + (f"The model prefers the real information by {b['mean_delta']:+.2f} logits on "
-                 f"{b['win_rate']:.0%} of questions, so it is reading substance rather than "
-                 "counting tokens."
-                 if good else
-                 f"The model cannot tell them apart ({b['mean_delta']:+.2f}), so it is rewarding "
-                 "length rather than substance.") + "</div>")
+        # The check on the scorer itself, after the transforms it validates. Prose, pairing and
+        # row order come from findings.substance_check, shared with the dashboard so the two
+        # cannot answer the same question differently.
+        check = substance_check(sm, _check)
+        if check:
+            A("<h3>Does added length have to carry information?</h3>")
+            A(f"<div class='note {'good' if check['good'] else 'warn'}'>"
+              f"<b>{check['lead']}</b> {check['body']}</div>")
+            A(f"<p class='sub'>{check['setup']}</p>")
+            _rows = [{
+                "tokens added either way": (round(r["added_tokens"])
+                                            if r["added_tokens"] else None),
+                "mean_delta": r["mean_delta"],
+                "win_rate": r["win_rate"],
+                "x rewording alone": round(r["ratio"], 1) if r["ratio"] else None,
+                "reads as": (viz.fault_chip(r["item"], **viz.SUBSTANCE_LABELS)[0]
+                             if r["item"] else ""),
+            } for r in check["rows"]]
+            A(_table(_rows, list(_rows[0])))
+            A(f"<p class='sub'>{check['counts']}</p>")
 
         A("<h3>How length was accounted for</h3>")
         A("<p>Comparing a styled answer against the plain one measures two things at once: the "

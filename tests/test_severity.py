@@ -10,7 +10,7 @@ import re
 import pytest
 
 from rmi import severity as sv
-from rmi.findings import verdict_line
+from rmi.findings import module_items, verdict_line
 from rmi.probes.noise_floor import NoiseFloor
 import numpy as np
 
@@ -180,6 +180,67 @@ def test_banner_colour_matches_the_band(ratio, expected_class):
     assert (expected_class == "red") == (band in ("High", "Moderate"))
 
 
+def test_the_style_tab_sections_account_for_the_whole_of_its_tile():
+    """The tile counts the substance check as well as the transforms. The tab splits them across
+    two sections, so what has to hold is that the two together come to the tile's numbers: a
+    reader told "3 of 6" who finds one section claiming 1 of 4 must be able to locate the rest.
+    """
+    def f(**kw):
+        return dict({"category": "style", "confirmed": True, "systematic_bar": 0.1,
+                     "n_items": 30}, **kw)
+
+    R = {"findings": [
+        f(title="flattery", effect=0.13, valence="vulnerability", group="content_neutral",
+          detail={"kind": "length_adjusted", "transform": "flattery"}),
+        # Resisted, so the model behaving well: counted by neither.
+        f(title="punctuation", effect=-0.36, valence="healthy", group="content_neutral",
+          detail={"kind": "length_adjusted", "transform": "punctuation"}),
+        f(title="elaboration", effect=-0.40, valence="informational", group="quality_bearing",
+          detail={"kind": "length_adjusted", "transform": "elaboration"}),
+        # The check, at two lengths. Charted with neither group, and its fault runs negative.
+        f(title="filler@2", effect=-0.37, valence="vulnerability",
+          detail={"kind": "quality_control"}),
+        f(title="filler@1", effect=-0.29, valence="vulnerability",
+          detail={"kind": "quality_control"}),
+    ]}
+    tile = sv.summarise(R["findings"], "style")
+    transforms = module_items(R, "style", group="content_neutral")
+    check = module_items(R, "style", group="quality_control")
+    assert (tile["n_material"], tile["n_vulnerabilities"]) == (3, 3)
+    # Adverse *and* material, the pair `verdict_line` counts: an effect running the other way is
+    # the model resisting, and `is_material` says nothing about direction.
+    both = transforms + check
+    assert sum(1 for i in both if i["adverse"] and i["material"]) == tile["n_material"]
+    assert sum(1 for i in both if i["adverse"]) == tile["n_vulnerabilities"]
+    # The check is a finding, so it has to carry a size: its own tab section reports that, and
+    # without it the tile's worst effect would appear nowhere a reader can reach.
+    assert max(i["ratio"] for i in check) == tile["severity"]
+    # ... and it is not silently folded into the transforms, which are what the charts show.
+    assert len(transforms) == 2 and len(check) == 2
+    assert not any(i["detail"].get("kind") == "quality_control" for i in transforms)
+    # The tab's own verdict covers both sections, so it states the tile's count and takes its
+    # colour from the tile's worst effect. A reader comparing the two screens compares these.
+    html = verdict_line(transforms + check, "style", "style is rewarded")
+    assert f'<b>{tile["n_material"]} of {tile["n_vulnerabilities"]}</b>' in html, html
+    assert f'{tile["severity"]:.1f} times' in html, html
+    assert sv.band(tile["severity"], confirmed=True) == "Moderate"
+    assert 'class="verdict"' in html, "a red tile cannot show a mild banner on its own tab"
+
+
+def test_every_material_finding_is_named_not_just_the_largest():
+    """A reader told "3 of 6" could find one of the three and had no way to name the other two."""
+    same = "content-free filler versus genuine information"
+    items = [item(0.37, ratio=4.9, label=same), item(0.29, ratio=3.9, label=same),
+             item(0.10, ratio=1.3, label="flattery")]
+    html = verdict_line(items, "style", "style is rewarded")
+    assert "The other 2:" in html
+    assert "flattery" in html and "1.3x" in html and "3.9x" in html
+    # The two that share a label differ only by their size, so the size has to be shown or the
+    # list reads as one finding printed twice.
+    assert "+0.29 logits, 3.9x" in html, html
+    assert "1.3x)" in html and "logits, 1.3x" not in html, "only the colliding name needs it"
+
+
 def test_banner_is_mild_when_confirmed_but_immaterial():
     assert _banner_class([item(0.5, ratio=0.5)]) == "mild"
 
@@ -281,3 +342,101 @@ def test_an_unconfirmed_finding_is_unconfirmed_however_large():
 def test_a_finding_with_no_bar_is_unknown_rather_than_negligible():
     """Failing open here would call an unmeasurable effect harmless."""
     assert sv.finding_band(finding(9.0, bar=None, confirmed=True)) == "Unknown"
+
+
+# ---------------------------------------------------------------------------------------
+# the substance check, phrased once for both renderers
+# ---------------------------------------------------------------------------------------
+
+
+def _style_block(*deltas, mismatch=4.0, added=(30, 55)):
+    return {"padding_vs_elaboration": [
+        {"mean_delta": d, "win_rate": 0.5, "mean_length_mismatch": mismatch,
+         "rows": [{"elaboration_added_tokens": a}]}
+        for d, a in zip(deltas, added)]}
+
+
+def _qc_items(*deltas, confirmed=True, ratio=4.0):
+    return [{"label": "content-free filler versus genuine information", "effect": d,
+             "confirmed": confirmed, "adverse": d < 0, "material": True, "ratio": ratio,
+             "n_items": 30} for d in deltas]
+
+
+def test_the_substance_check_answers_in_its_own_first_line():
+    """Buried mid-paragraph, the answer to the section's own question was the third sentence."""
+    from rmi.findings import substance_check
+    fail = substance_check(_style_block(-0.29, -0.37), _qc_items(-0.29, -0.37))
+    assert fail["lead"] == "No: filler wins." and not fail["good"]
+    passes = substance_check(_style_block(2.0, 1.9), _qc_items(2.0, 1.9))
+    assert passes["lead"] == "Yes: real information wins." and passes["good"]
+    # A failure that did not reach significance is a third outcome, not a quieter version of one.
+    undecided = substance_check(_style_block(-0.29), _qc_items(-0.29, confirmed=False))
+    assert undecided["lead"] == "Undecided."
+
+
+def test_the_substance_check_pairs_each_length_with_its_own_finding():
+    """`rank_findings` sorts, so the findings do not arrive in the probe's order, and two lengths
+    that scored identically must not collapse onto one row."""
+    from rmi.findings import substance_check
+    out = substance_check(_style_block(-0.29, -0.37), _qc_items(-0.37, -0.29))
+    # Largest first, each carrying the finding whose effect matches it.
+    assert [r["mean_delta"] for r in out["rows"]] == [-0.37, -0.29]
+    assert [r["item"]["effect"] for r in out["rows"]] == [-0.37, -0.29]
+    tied = substance_check(_style_block(-0.3, -0.3), _qc_items(-0.3, -0.3))
+    assert all(r["item"] is not None for r in tied["rows"]), "a tie must not drop a row"
+    assert tied["rows"][0]["item"] is not tied["rows"][1]["item"]
+
+
+def test_the_substance_check_says_whether_it_counts_toward_the_tile():
+    """Healthy findings are excluded from the risk figures, so a passing check counts for nothing
+    and saying otherwise would leave its multiple looking like an uncounted vulnerability."""
+    from rmi.findings import substance_check
+    assert "counts as a finding" in substance_check(_style_block(-0.37), _qc_items(-0.37))["counts"]
+    assert "kept out" in substance_check(_style_block(2.0), _qc_items(2.0))["counts"]
+
+
+def test_a_result_file_without_per_question_detail_states_no_token_count():
+    """"+0 tokens" would report a measurement the file does not contain."""
+    from rmi.findings import substance_check
+    block = _style_block(-0.37)
+    block["padding_vs_elaboration"][0].pop("rows")
+    assert substance_check(block, _qc_items(-0.37))["rows"][0]["added_tokens"] is None
+
+
+def sv_bands():
+    from rmi.findings import _BAND_CLASS
+    return set(_BAND_CLASS)
+
+
+def test_a_banner_takes_its_colour_from_its_own_category_band():
+    """A tab that builds its own banner rather than calling verdict_line still has to agree with
+    its pill: a hardcoded red alarm beside an amber chip is the failure this prevents."""
+    from rmi.findings import banner_class
+    assert banner_class("High") == "" and banner_class("Moderate") == ""
+    assert banner_class("Low") == " mild" and banner_class("Unconfirmed") == " mild"
+    # A category with nothing to report is not an alarm, and it reaches a hand-built banner:
+    # `summarise` returns "None detected" for it, which no band() call ever produces.
+    assert banner_class("None detected") == " clear"
+    # An unrecognised band must not fall through to the loudest style.
+    assert banner_class("something new") == " mild"
+    # Every band severity can actually produce has an entry, so none of them takes the fallback.
+    for ratio in (None, 0.5, 1.5, 2.5, 9.0):
+        for confirmed in (True, False):
+            assert sv.band(ratio, confirmed=confirmed) in sv_bands()
+
+
+def test_the_substance_check_is_absent_rather_than_empty_when_it_did_not_run():
+    """Both renderers gate their whole section on this, so a falsy value has to mean 'no section'
+    rather than an empty one they would render headings and a table for."""
+    from rmi.findings import substance_check
+    assert substance_check({}, []) is None
+    assert substance_check({"padding_vs_elaboration": []}, []) is None
+
+
+def test_a_style_finding_of_an_unknown_kind_is_dropped_rather_than_crashing():
+    """Result files outlive the code that wrote them, so an unrecognised kind must not raise."""
+    R = {"findings": [{"category": "style", "effect": 0.2, "confirmed": True, "n_items": 30,
+                       "systematic_bar": 0.1, "valence": "vulnerability",
+                       "detail": {"kind": "something_new"}}]}
+    assert module_items(R, "style") == []
+    assert module_items(R, "style", group="quality_control") == []

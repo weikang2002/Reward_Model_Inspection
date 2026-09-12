@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 211 tests, ~28s
+uv run pytest -q                           # 233 tests, ~35s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -21,7 +21,9 @@ from rmi.report import build
 for f in list_results(): build(load_results(f), f.with_suffix('.html'))"
 ```
 
-There is no linter or formatter configured. Scans need MPS: CPU is ~25x slower, which turns a
+There is no linter or formatter configured, but `uv run --with pyflakes python -m pyflakes app.py
+rmi/*.py rmi/probes/*.py tests/*.py` is worth a pass before finishing: it is what caught a second
+`_tiny` shadowing the first in `app.py`. Scans need MPS: CPU is ~25x slower, which turns a
 few-minute scan into over an hour.
 
 ## What this is
@@ -77,6 +79,26 @@ module into one ranked `findings` list. Each finding carries `category`, `effect
 `systematic_bar`, `n_items`, `confirmed`, `band`, and **`valence`** (`vulnerability` / `healthy` /
 `informational`). Valence matters: without it the ranked list puts "correctly penalises junk" at
 the top of a vulnerability report, and category risk scores get driven by the model behaving well.
+
+**A category's tab must state its own tile's count, and take its colour from the same band.**
+`severity.summarise` counts a category's *vulnerability-valenced* findings, so `verdict_line`
+takes its denominator from the adverse items rather than from every probe run. Style is where this
+came apart: its tile counts the filler-versus-information check, which is charted with neither
+transform group, so the tab read "1 of 5, largest 1.3x" beside a tile reading "3 of 6, worst 4.9x".
+`findings.substance_check` is that check phrased once, rows paired to their findings and all, and
+both renderers read the section out of it. A tab that builds its own banner rather than calling
+`verdict_line` - reward hacking does - takes its class from `findings.banner_class`, never a
+hardcoded one. `tests/test_dashboard.py` runs the app headlessly and pins the agreement.
+
+**The ranked chart's hatch marks unconfirmed *vulnerabilities* only.** Sycophancy and
+content-neutral style are tested one-sided toward the fault, so an effect running the healthy way
+scores p near 1 by construction; hatching those marked the strongest anti-sycophancy result in a
+scan, 8.2x, as though it were a weak measurement. Three plotly details are pinned by tests because
+each one silently blanks something: `marker.pattern.fillmode` defaults to `"replace"`, which makes
+`marker.color` the colour of the *stripes* and paints the bar white; a legend swatch comes from a
+trace's **first point**, so a trace mixing solid and hatched rows advertises the wrong one, which is
+why solid and hatched are separate traces; and an entirely empty trace is dropped from the legend,
+so a legend-only entry carries a null x on a real row.
 
 **`rmi/findings.py`, `rmi/severity.py`, `rmi/viz.py`, `rmi/textdiff.py`** are the shared
 presentation layer. `app.py` and `rmi/report.py` both import them so a bar in one and a sentence in
@@ -250,7 +272,11 @@ rule in `StubScorer` and requires the style module to recover the slope and repo
 effect for every transform. An audit tool that cannot recover a rule it planted itself has no
 business reporting findings about a real model. If you touch the style regression, run this first.
 
-When changing the dashboard, check it renders headlessly rather than only reading the diff:
+`tests/test_dashboard.py` runs `app.py` headlessly against a stub scan and pins what no unit test
+can see: that it renders without exception, that each tab's verdict states its own tile's count,
+that the export button is live on the *first* load of a session, and that each drill-down names the
+selection it inherits. It points the app at a temporary results directory, so it never depends on
+what you happen to have scanned. For a quick check while iterating:
 
 ```bash
 uv run python -c "
@@ -258,6 +284,12 @@ from streamlit.testing.v1 import AppTest
 at = AppTest.from_file('app.py', default_timeout=500); at.run()
 print('exceptions:', len(at.exception)); [print(e.value) for e in at.exception]"
 ```
+
+Neither of those sees layout. A change to spacing, ordering or a chart's encoding needs a real
+browser: `uv run streamlit run app.py --server.port 8599 --server.headless true`, then drive it
+with playwright (already a dependency) and **look at the screenshot**. Three separate bugs in the
+ranked chart — blank bars, a missing legend entry, and a legend swatch advertising the wrong
+pattern — rendered without a single exception and passed every unit test at the time.
 
 Note that `pandas` attribute access on a column named `transform` returns the DataFrame *method*,
 not the column, and silently evaluates to `False` in a filter. Use bracket access throughout.

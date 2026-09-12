@@ -11,7 +11,8 @@ import pytest
 
 from rmi import viz
 from rmi import methodology
-from rmi.findings import self_check
+from rmi import severity as sv
+from rmi.findings import module_items, self_check, substance_check, verdict_line
 from rmi.report import build
 from rmi.runner import run_scan
 from rmi.scoring import StubScorer
@@ -98,8 +99,12 @@ def test_bias_bars_with_nothing_to_plot_returns_an_empty_figure():
 
 
 def _bars(fig):
-    """Every bar across every trace. Bars are grouped into one trace per valence."""
-    return [(y, x) for t in fig.data for y, x in zip(t.y, t.x)]
+    """Every bar actually drawn, across every trace.
+
+    Bars are grouped into one trace per valence, and a legend-only entry is a trace carrying a
+    null x on some row: plotly lists it but draws nothing, so it is not a bar.
+    """
+    return [(y, x) for t in fig.data for y, x in zip(t.y, t.x) if x is not None]
 
 
 def test_findings_vs_noise_ranks_by_ratio_and_keeps_the_largest():
@@ -150,11 +155,45 @@ def test_two_findings_that_describe_the_same_thing_get_distinct_rows():
 def test_the_chart_legend_names_what_each_colour_means():
     """The colours used to be decoded only by a caption underneath."""
     findings = [{"title": "a", "effect": 3.0, "systematic_bar": 1.0, "valence": v,
-                 "category": "style", "detail": {}}
+                 "category": "style", "detail": {}, "confirmed": True}
                 for v in ("vulnerability", "healthy", "informational")]
     fig = viz.findings_vs_noise(findings)
     assert fig.layout.showlegend
     assert {t.name for t in fig.data} == {n for _, n in viz.VALENCE_LEGEND}
+
+
+def test_a_finding_that_missed_significance_is_marked_as_such():
+    """Clearing the line is only half of "big enough to matter", and the largest bar on the chart
+    can be one that counts for nothing."""
+    findings = [{"title": "a", "effect": 9.0, "systematic_bar": 1.0, "valence": "vulnerability",
+                 "category": "style", "detail": {}, "confirmed": False},
+                {"title": "b", "effect": 3.0, "systematic_bar": 1.0, "valence": "vulnerability",
+                 "category": "style", "detail": {}, "confirmed": True}]
+    fig = viz.findings_vs_noise(findings)
+    assert {t.marker.pattern.shape for t in fig.data} == {"/", ""}
+    assert "not statistically confirmed" in {t.name for t in fig.data}
+    # Plotly's default fillmode, "replace", paints the pattern's fgcolor over the whole bar and
+    # leaves the background transparent, so a white fgcolor made every hatched row vanish.
+    assert all(t.marker.pattern.fillmode == "overlay" for t in fig.data), fig.data
+    # The legend entry has to be a listed trace, not an empty one: plotly drops empty traces from
+    # the legend, leaving the hatch unexplained.
+    # The hatched bars are their own trace. Plotly takes a legend swatch from a trace's first
+    # point, so a trace mixing solid and hatched rows left "a vulnerability" showing a hatched
+    # chip and no solid red anywhere in the legend.
+    entry = next(t for t in fig.data if t.name == "not statistically confirmed")
+    assert entry.marker.pattern.shape == "/" and entry.x == (9.0,), (entry.x, entry.y)
+    solid = next(t for t in fig.data if t.name == "a vulnerability")
+    assert solid.marker.pattern.shape == "" and solid.x == (3.0,), (solid.x, solid.y)
+    # A healthy finding is never hatched. The directional modules test one-sided toward the fault,
+    # so an effect running the other way scores p near 1 by construction: hatching it marked the
+    # strongest anti-sycophancy result on the chart as though it were a weak measurement.
+    healthy = viz.findings_vs_noise([
+        {"title": "h", "effect": 8.0, "systematic_bar": 1.0, "valence": "healthy",
+         "category": "sycophancy", "detail": {}, "confirmed": False}])
+    assert {t.marker.pattern.shape for t in healthy.data} == {""}
+    # ... and the entry is absent when there is nothing to explain, rather than always shown.
+    clean = viz.findings_vs_noise([dict(findings[1])])
+    assert not any("not statistically confirmed" in (t.name or "") for t in clean.data)
 
 
 def test_the_sorted_order_survives_being_split_across_traces():
@@ -470,3 +509,69 @@ def test_the_verdict_ignores_findings_that_show_the_model_behaving_well():
     from rmi.findings import overview_verdict
     R = {"findings": [finding_row(11.0, valence="healthy")]}
     assert "No confirmed vulnerabilities" in overview_verdict(R, None)
+
+
+# ---------------------------------------------------------------------------------------
+# a finding marked outside a chart must be marked the way the chart would mark it
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_fault_chip_matches_the_bar_the_same_finding_would_get():
+    """The two renderers show the substance check as a pill and as a table cell. Both go through
+    viz.fault_chip, which goes through bias_state, so none of the three can drift apart."""
+    item = {"confirmed": True, "adverse": True, "material": True, "effect": -0.37, "ratio": 4.9}
+    name, color = viz.fault_chip(item, **viz.SUBSTANCE_LABELS)
+    state = viz.bias_state(item, signed=True)
+    assert (name, color) == (viz.SIGNED_STATES[state][0].format(**viz.SUBSTANCE_LABELS),
+                             viz.SIGNED_STATES[state][1])
+    assert color == viz.STATUS["critical"], "a confirmed material fault is the red state"
+
+
+def test_a_contrast_whose_fault_runs_negative_is_not_read_as_healthy():
+    """The substance check fails with a *negative* delta, so the sign rule the transforms use
+    reads it backwards and would colour the largest style vulnerability green."""
+    fault = {"confirmed": True, "adverse": True, "material": True, "effect": -0.37}
+    assert viz.bias_state(fault, signed=True) == 0
+    healthy = {"confirmed": True, "adverse": False, "material": True, "effect": 2.0}
+    assert viz.bias_state(healthy, signed=True) == 2
+    # Without an explicit direction the sign still decides, which is what every transform relies on.
+    assert viz.bias_state({"confirmed": True, "material": True, "effect": 0.3}, signed=True) == 0
+    assert viz.bias_state({"confirmed": True, "material": True, "effect": -0.3}, signed=True) == 2
+
+
+def test_the_ranked_chart_survives_having_nothing_to_draw():
+    """It renders before any filtering is known to have left something, on every run."""
+    fig = viz.findings_vs_noise([])
+    assert fig.data == ()
+
+
+def test_the_report_states_the_substance_check_in_the_shared_words(rendered):
+    """Both renderers read this section out of findings.substance_check. Paraphrasing it in one of
+    them is how the two came to answer the same question differently before it was shared."""
+    scan, html = rendered
+    check = substance_check(scan["style"], module_items(scan, "style", group="quality_control"))
+    assert "Does added length have to carry information?" in html
+    assert check["lead"] in html and check["body"] in html
+    assert check["setup"] in html and check["counts"] in html
+    # Every length is a row, not just the largest: each is a ranked finding the tile counts.
+    assert len(check["rows"]) == len(scan["style"]["padding_vs_elaboration"])
+    for row in check["rows"]:
+        assert f"{row['mean_delta']:.3f}" in html or f"{row['mean_delta']:.4g}" in html
+
+
+def test_the_style_verdict_covers_the_check_as_well_as_the_transforms(rendered):
+    """The category tile counts both. A verdict over the transforms alone read "1 of 5, largest
+    1.3x" beside a tile reading "3 of 6, worst 4.9x" for the same category."""
+    scan, html = rendered
+    tile = sv.summarise(scan["findings"], "style")
+    items = (module_items(scan, "style", group="content_neutral")
+             + module_items(scan, "style", group="quality_control"))
+    line = verdict_line(items, "style", "surface style is rewarded for its own sake")
+    # Only the material branch makes the tile's claim. "N of M are still statistically
+    # real" below it counts confirmed-of-adverse, which is a different sentence.
+    counted = re.search(r"<b>(\d+) of (\d+)</b> probes", line)
+    if counted:
+        assert (int(counted.group(1)), int(counted.group(2))) == (tile["n_material"],
+                                                                  tile["n_vulnerabilities"])
+    # The report renders that exact line, so the tab and the tile cannot disagree in either.
+    assert line.split("</b>", 1)[0].split(">")[-1] in html or not counted

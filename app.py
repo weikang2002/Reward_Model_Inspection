@@ -20,8 +20,8 @@ from rmi import methodology
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
-from rmi.findings import (module_items, overview_verdict, self_check, tone_check,
-                          verdict_line)
+from rmi.findings import (banner_class, module_items, overview_verdict, self_check,
+                          substance_check, tone_check, verdict_line)
 from rmi.report import build as build_report
 from rmi.scoring import (MAX_DOWNLOAD_BYTES, ModelTooLargeError, RewardModel,
                          check_download_size, download_size)
@@ -95,6 +95,10 @@ st.markdown("""
   .verdict .hint {display:block; color:#52514e; font-size:12.5px; margin-top:6px;}
   ins {background:#d7f0d7; text-decoration:none;}
   ins.attack {background:#fbe3e0; border-bottom:2px solid #d03b3b; text-decoration:none;}
+  /* A swap is neither an improvement nor an attack: the identity drill-down marks the words
+     that differ between two variants, where green would clash with the answer diff beside
+     it (there the same value is the diff's left side, and therefore red). */
+  ins.swap {background:#f6ead0; border-bottom:2px solid #c79a2e; text-decoration:none;}
   .grouphead {font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#52514e;
               font-weight:700; margin:-2px 0 2px;}
   /* Tighten the gap between the checkboxes only; a negative margin on the box itself pushed the
@@ -106,6 +110,10 @@ st.markdown("""
   /* Same boxes for the two auxiliary blocks, left uncoloured: they are housekeeping, and a
      coloured edge would read as another probe category. */
   [class*="st-key-aux_"] {border-radius:9px !important; margin-bottom:.5rem;}
+  /* A panel whose every part follows one selection. The tint separates it from the page, and
+     the drill-down inside keeps its white background so it still reads as its own block. */
+  [class*="st-key-chain"] {border-radius:9px !important; background:#fbfbf9 !important;
+     padding:6px 14px 2px !important;}
   [class*="st-key-drill"] details {border:1px solid #2a78d6 !important;
      border-left-width:5px !important; background:#ffffff !important; border-radius:9px;}
   [class*="st-key-drill"] details > summary {background:#ffffff !important;}
@@ -162,10 +170,21 @@ def clear_results(d: Path) -> tuple[int, list[str]]:
 # --------------------------------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown("### Run a scan")
+    # Opening a saved scan leads. Scanning takes minutes and is done once per model; reading the
+    # result is what the rest of the session is, so the picker is the first thing in reach.
+    st.markdown("### Open a past model scan to see results")
+    files = list_results()
+    labels = [f.name.replace("__", " · ").replace(".json", "") for f in files]
+    picked = st.selectbox("Results file", labels, index=len(labels) - 1 if labels else None) \
+        if files else None
+    if not files:
+        st.caption("No saved scans yet. Run one below and it is saved to `results/`.")
+
+    st.divider()
+    st.markdown("### Run a model scan")
     # Size first, because the sidebar truncates a long model id and a size at the end would be
     # the part that got cut.
-    model_choice = st.selectbox("Reward model", PRESET_MODELS + [OTHER],
+    model_choice = st.selectbox("Reward model from Hugging Face", PRESET_MODELS + [OTHER],
                                 format_func=lambda m: m if m == OTHER else
                                 f"{size_label(m)}{m.split('/')[-1]}")
     model_id = (st.text_input("HuggingFace model id", value="")
@@ -219,13 +238,6 @@ with st.sidebar:
     run_clicked = st.button("Run scan", type="primary", width="stretch",
                             disabled=not model_id or too_large is not None)
 
-    st.divider()
-    st.markdown("### Open a past run")
-    files = list_results()
-    labels = [f.name.replace("__", " · ").replace(".json", "") for f in files]
-    picked = st.selectbox("Results file", labels, index=len(labels) - 1 if labels else None) \
-        if files else None
-
     # Export and maintenance are one section: neither probes anything, both act on the files in
     # results/ rather than on a model, and grouping them keeps the two things that do run a scan
     # or read one at the top of the sidebar.
@@ -234,8 +246,16 @@ with st.sidebar:
 
     with st.container(border=True, key="aux_export"):
         st.markdown('<div class="grouphead">Export</div>', unsafe_allow_html=True)
-        export_clicked = st.button("Build standalone HTML report", width="stretch",
-                                   disabled="results" not in st.session_state)
+        # A picked file is enough. The run it names is only loaded into session state further down
+        # the script, after this whole sidebar has rendered, so keying off session state alone
+        # left the button dim on the very first load of a session and live from the next rerun on.
+        export_clicked = st.button(
+            "Build standalone HTML report", width="stretch",
+            disabled=picked is None and "results" not in st.session_state)
+        # Claimed here so the result lands under the button that produced it. The build needs the
+        # loaded run, which happens after the sidebar, and writing it there appended the download
+        # to the foot of the sidebar, below the maintenance box.
+        export_slot = st.container()
         st.caption("One self-contained file with every chart inlined. Opens in any browser with "
                    "no Python and no network.")
 
@@ -428,6 +448,12 @@ def band_pill(band: str) -> str:
             f'{html.escape(band)}</span>')
 
 
+def fault_pill(item: dict, **labels: str) -> str:
+    """``viz.fault_chip`` as a pill, for a finding shown outside a chart."""
+    name, color = viz.fault_chip(item, **labels)
+    return f'<span class="band" style="background:{color}">{html.escape(name)}</span>'
+
+
 def side_by_side(title_a, text_a, score_a, title_b, text_b, score_b, *, diff=True,
                  ins_class: str = ""):
     la, lb = (word_diff(text_a, text_b, ins_class=ins_class) if diff
@@ -480,13 +506,23 @@ if export_clicked and R is not None:
                or meta.get("results_path", "results/run.json")).with_suffix(".html")
     with st.spinner("Building report"):
         build_report(R, out)
-    with st.sidebar:
+    with export_slot:
         st.success(f"Wrote {out.name}")
         st.download_button("Download report", out.read_bytes(), file_name=out.name,
                            mime="text/html", width="stretch")
 
 # Tab names carry the same grouping as the sidebar: the first three are bias probes, the fourth
 # asks a different question entirely. Derived from PROBE_GROUPS so the two cannot drift apart.
+SCAN_TABS = 1 + len(PROBES)  # overview and the probes: this run's results
+# A rule before the first tab that is not about this run's results. Comparing two scans and the
+# appendix are tools, not findings, and sitting flush against the probes they read as two more
+# places to look for a result. Counted off PROBES so adding a probe cannot leave it in the wrong
+# gap; nth-child is safe because every child of the tab list is a tab.
+st.markdown(
+    f'<style>[role="tablist"] > [role="tab"]:nth-child({SCAN_TABS + 1})'
+    '{margin-left:18px !important; padding-left:20px !important;'
+    ' border-left:1px solid #dcdbd6 !important;}</style>',
+    unsafe_allow_html=True)
 tabs = st.tabs(["Overview"] + [probe_heading(p) for p in PROBES]
                + ["Compare models", "Appendix"])
 
@@ -532,7 +568,12 @@ with tabs[0]:
             f"The {shown} largest of {len(scored)} findings, each labelled with the category it "
             "came from. Bars inside the shaded band are no larger than rewording alone would "
             "produce at the same sample size, so they are real but too small to steer a policy. "
-            "Hover a bar for the effect in logits."
+            "A tile counts a finding only if it is a vulnerability, clears the line, *and* is "
+            "statistically confirmed; hatched red bars fail that last test, and green and blue "
+            "ones are not faults at all. Smaller findings than these are not drawn, so a "
+            "category's count can "
+            "be larger than the bars visible here; \u201cRead every finding in words\u201d below "
+            "lists all of them. Hover a bar for the effect in logits."
         )
 
     # ---- what the numbers above are measured against ------------------------------------
@@ -618,88 +659,111 @@ with tabs[1]:
         )
 
         st.markdown("#### Inspect one axis")
-        choices = {i["label"]: i for i in items}
-        pick = st.selectbox("Which axis", list(choices),
-                            index=list(choices).index(max(choices, key=lambda k: abs(choices[k]["effect"]))))
-        chosen = choices[pick]
-        kind = chosen["detail"].get("kind")
+        # One panel, one selection: the chart, the reading of it and the scored text are
+        # all driven by the control at the top of this box. With a "####" heading of its
+        # own the drill-down read as an independent section, and nothing said which
+        # choice it was following.
+        with st.container(border=True, key="chain_identity"):
+            choices = {i["label"]: i for i in items}
+            pick = st.selectbox("Which axis", list(choices),
+                                index=list(choices).index(max(choices, key=lambda k: abs(choices[k]["effect"]))),
+                                help="Everything in this panel, the chart and the scored text "
+                                     "below it, follows this choice.")
+            chosen = choices[pick]
+            kind = chosen["detail"].get("kind")
 
-        if kind == "omnibus":
-            blk = idr[f"names_{chosen['detail']['subset']}"]
-            o = blk["omnibus_permutation"]
-            st.plotly_chart(viz.identity_groups(blk), width="stretch",
-                            config={"displayModeBar": False})
-            hs = blk.get("half_split_control", {})
-            order = sorted(blk["group_means"], key=blk["group_means"].get, reverse=True)
-            fits = o["statistic"] <= o["null_p95"]
-            st.markdown(
-                f"Everything else in the template is identical. Only the name changes, and the "
-                f"model still ranks them **{' > '.join(k.replace('_', ' ') for k in order)}**. "
-                f"Top to bottom that is `{o['statistic']:.2f}` logits.\n\n"
-                f"The grey band is how wide that spread gets when the names are reshuffled "
-                f"between groups at random: `{o['null_p95']:.2f}` at most, 95% of the time. The "
-                + (f"groups **fit inside it**, so this ordering is the kind of thing name choice "
-                   f"produces on its own (p = {o['p_value']:.3g})."
-                   if fits else
-                   f"groups **do not fit inside it**. A spread this wide comes up in only "
-                   f"**{o['p_value'] * 100:.2f}%** of reshuffles, so the ordering is not chance.")
-                + (f" A second control agrees: two random halves of the *same* group land at most "
-                   f"`{hs['p95_abs_diff']:.2f}` apart, which is this comparison run with no "
-                   "identity difference in it at all." if hs.get("p95_abs_diff") else "")
-            )
-        else:
-            e = idr["descriptors"][chosen["detail"]["axis"]]
-            st.plotly_chart(viz.descriptor_chart(e), width="stretch",
-                            config={"displayModeBar": False})
-            st.markdown(
-                f"**{html.escape(e['highest'])}** scores highest and "
-                f"**{html.escape(e['lowest'])}** lowest, a gap of `{e['max_gap']:.2f}` logits. "
-                f"Shuffling the descriptors within each template gives a gap that large "
-                f"**{e['permutation']['p_value'] * 100:.2f}%** of the time. Based on "
-                f"{e['n_templates']} templates, so treat it as indicative."
-            )
-
-        # Name swaps and descriptor swaps are scored in two separate sets of templates, so the
-        # drill-down has to follow whichever axis is selected above.
-        if kind == "omnibus":
-            subset = chosen["detail"]["subset"]
-            rows = [a for a in idr.get("arms", []) if a["distribution"] == subset]
-            varies, extra_cols = "name", ["group"]
-            what = "name"
-        else:
-            axis = chosen["detail"]["axis"]
-            rows = [a for a in idr.get("descriptor_arms", []) if a["axis"] == axis]
-            varies, extra_cols = "level", []
-            what = f"{axis} descriptor"
-
-        st.markdown("#### Read the exact text")
-        with st.expander(f"See the scored text, swapping the {what}",
-                         icon=":material/article:", expanded=True, key="drill_identity"):
-            arms = pd.DataFrame(rows)
-            if arms.empty:
-                st.info("No scored text was stored for this axis.")
+            if kind == "omnibus":
+                blk = idr[f"names_{chosen['detail']['subset']}"]
+                o = blk["omnibus_permutation"]
+                st.plotly_chart(viz.identity_groups(blk), width="stretch",
+                                config={"displayModeBar": False})
+                hs = blk.get("half_split_control", {})
+                order = sorted(blk["group_means"], key=blk["group_means"].get, reverse=True)
+                fits = o["statistic"] <= o["null_p95"]
+                st.markdown(
+                    f"Everything else in the template is identical. Only the name changes, and the "
+                    f"model still ranks them **{' > '.join(k.replace('_', ' ') for k in order)}**. "
+                    f"Top to bottom that is `{o['statistic']:.2f}` logits.\n\n"
+                    f"The grey band is how wide that spread gets when the names are reshuffled "
+                    f"between groups at random: `{o['null_p95']:.2f}` at most, 95% of the time. The "
+                    + (f"groups **fit inside it**, so this ordering is the kind of thing name choice "
+                       f"produces on its own (p = {o['p_value']:.3g})."
+                       if fits else
+                       f"groups **do not fit inside it**. A spread this wide comes up in only "
+                       f"**{o['p_value'] * 100:.2f}%** of reshuffles, so the ordering is not chance.")
+                    + (f" A second control agrees: two random halves of the *same* group land at most "
+                       f"`{hs['p95_abs_diff']:.2f}` apart, which is this comparison run with no "
+                       "identity difference in it at all." if hs.get("p95_abs_diff") else "")
+                )
             else:
-                domains = {r["template_id"]: r["domain"].replace("_", " ")
-                           for r in arms.to_dict("records")}
-                opts, fmt = labelled(arms["template_id"].unique(), domains)
-                tmpl = st.selectbox("Template", opts, format_func=fmt,
-                                    key=f"identity_template_{pick}")
-                sub = arms[arms["template_id"] == tmpl].sort_values("score", ascending=False)
-                top, bot = sub.iloc[0], sub.iloc[-1]
+                e = idr["descriptors"][chosen["detail"]["axis"]]
+                st.plotly_chart(viz.descriptor_chart(e), width="stretch",
+                                config={"displayModeBar": False})
+                st.markdown(
+                    f"**{html.escape(e['highest'])}** scores highest and "
+                    f"**{html.escape(e['lowest'])}** lowest, a gap of `{e['max_gap']:.2f}` logits. "
+                    f"Shuffling the descriptors within each template gives a gap that large "
+                    f"**{e['permutation']['p_value'] * 100:.2f}%** of the time. Based on "
+                    f"{e['n_templates']} templates, so treat it as indicative."
+                )
 
-                def _tag(r):
-                    if "group" in r.index:
-                        return f"{r[varies]} ({r['group'].replace('_', ' ')})"
-                    return str(r[varies])
+            # Name swaps and descriptor swaps are scored in two separate sets of templates, so the
+            # drill-down has to follow whichever axis is selected above.
+            if kind == "omnibus":
+                subset = chosen["detail"]["subset"]
+                rows = [a for a in idr.get("arms", []) if a["distribution"] == subset]
+                varies, extra_cols = "name", ["group"]
+                what = "name"
+            else:
+                axis = chosen["detail"]["axis"]
+                rows = [a for a in idr.get("descriptor_arms", []) if a["axis"] == axis]
+                varies, extra_cols = "level", []
+                what = f"{axis} descriptor"
 
-                st.markdown(f"**Prompt:** {html.escape(top['question'])}")
-                st.caption(f"The {what} appears in the prompt as well as the answer, so this is "
-                           "the highest-scoring variant's prompt.")
-                side_by_side(f"Highest: {_tag(top)}", top["text"], top["score"],
-                             f"Lowest: {_tag(bot)}", bot["text"], bot["score"])
-                st.caption(f"Only the {what} differs. Every variant scored in this template:")
-                st.dataframe(sub[[varies] + extra_cols + ["score"]], width="stretch",
-                             hide_index=True, height=260)
+            st.markdown(f"##### Read the exact text for {html.escape(pick)}")
+            st.caption(f"The rows behind the chart above, still for the **{pick}** axis chosen at "
+                       "the top of this panel.")
+            with st.expander(f"See the scored text, swapping the {what}",
+                             icon=":material/article:", expanded=True, key="drill_identity"):
+                arms = pd.DataFrame(rows)
+                if arms.empty:
+                    st.info("No scored text was stored for this axis.")
+                else:
+                    domains = {r["template_id"]: r["domain"].replace("_", " ")
+                               for r in arms.to_dict("records")}
+                    opts, fmt = labelled(arms["template_id"].unique(), domains)
+                    tmpl = st.selectbox("Template", opts, format_func=fmt,
+                                        key=f"identity_template_{pick}")
+                    sub = arms[arms["template_id"] == tmpl].sort_values("score", ascending=False)
+                    top, bot = sub.iloc[0], sub.iloc[-1]
+
+                    def _tag(r):
+                        if "group" in r.index:
+                            return f"{r[varies]} ({r['group'].replace('_', ' ')})"
+                        return str(r[varies])
+
+                    # The swapped identity sits in the question as well, so the two variants were
+                    # scored against two different prompts. One unmarked prompt above a pair of answers
+                    # read as the prompt for both, and left the reader to work out for themselves which
+                    # variant the words in it came from.
+                    same_prompt = top["question"] == bot["question"]
+                    st.markdown("**Prompt**")
+                    st.markdown('<div class="txtbox">' + (
+                        html.escape(top["question"]) if same_prompt else
+                        word_diff(bot["question"], top["question"], ins_class="swap")[1]
+                    ) + "</div>", unsafe_allow_html=True)
+                    if not same_prompt:
+                        st.caption(
+                            f"The {what} is swapped in the prompt as well as in the answer, so every "
+                            f"variant has its own prompt. This is the highest-scoring one's: it reads "
+                            f"**{top[varies]}** (highlighted) where the lowest-scoring one reads "
+                            f"**{bot[varies]}**. Everything else is identical."
+                        )
+                    side_by_side(f"Highest: {_tag(top)}", top["text"], top["score"],
+                                 f"Lowest: {_tag(bot)}", bot["text"], bot["score"])
+                    st.caption(f"Only the {what} differs. Every variant scored in this template:")
+                    st.dataframe(sub[[varies] + extra_cols + ["score"]], width="stretch",
+                                 hide_index=True, height=260)
 
 # --------------------------------------------------------------------------------------
 # Sycophancy
@@ -745,71 +809,80 @@ with tabs[2]:
 
         # ---- inspect one level ------------------------------------------------------------
         st.markdown("#### Every scenario, at one level of pressure")
-        pick = st.selectbox("How hard the user pushes", viz.LADDER,
-                            index=viz.LADDER.index(slope["level"]),
-                            format_func=lambda k: f"The user {viz.LADDER_LABEL[k]}")
-        lvl = by_level[pick]
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            st.plotly_chart(viz.sycophancy_scenarios(sy["arms"], pick), width="stretch",
-                            config={"displayModeBar": False})
-        with c2:
-            st.metric("Reward for agreeing", f"{lvl['mean_delta']:+.2f} logits",
-                      delta=f"agreement wins on {lvl['win_rate']:.0%} of scenarios",
-                      delta_color="off")
-            st.markdown(
-                f"95% interval `{lvl['ci_low']:+.2f}` to `{lvl['ci_high']:+.2f}`, "
-                f"p = `{lvl['p_sign']:.3f}` across {lvl['n_items']} scenarios. "
-                + ("The model leans toward agreeing at this level."
-                   if lvl["mean_delta"] > 0 else
-                   "The model still prefers correcting at this level.")
-            )
-            st.caption(
-                "Each dot is one scenario, red where agreeing scored higher and green where "
-                "correcting did. A mean can come from every scenario leaning the same way or from "
-                "a few extremes, and those mean different things for a policy trained on it."
-            )
-            st.caption(
-                f"Agreements run about {abs(m['mean_token_delta']):.0f} tokens shorter than "
-                "corrections, because a correction has to explain itself. Adjusting for that "
-                f"leaves the agreement effect at {sy['length_adjusted']['agrees']['coef']:+.2f} "
-                "logits overall, so it is not a length artifact."
-            )
-
-        # ---- the exact text ----------------------------------------------------------------
-        st.markdown("#### Read the exact text")
-        with st.expander(f"See the responses when the user {viz.LADDER_LABEL[pick]}",
-                         icon=":material/article:", expanded=True, key="drill_sycophancy"):
-            arms = pd.DataFrame(sy["arms"])
-            topics = dict(zip(arms["scenario_id"], arms["topic"]))
-            s_opts, s_fmt = labelled(topics, topics)
-            sid = st.selectbox("Scenario", s_opts, format_func=s_fmt)
-            sub = arms[(arms["scenario_id"] == sid) & (arms["insistence"] == pick)]
-            st.markdown("**The user says:**")
-            st.markdown(f'<div class="txtbox">{html.escape(sub.iloc[0]["question"])}</div>',
-                        unsafe_allow_html=True)
-            # Each scenario is written more than one way and the reported premium averages them,
-            # so quote that average rather than either pair's own delta, which would match nothing
-            # else on the tab. Showing every pair forced a label ("version 1 of 2") that told the
-            # reader nothing about what separated them.
-            variants = sorted({c.split("_", 1)[1] for c in sub["cell"]
-                               if c.startswith("agrees_")}, reverse=True)
-            pairs = [(sub[sub["cell"] == f"agrees_{v}"].iloc[0],
-                      sub[sub["cell"] == f"corrects_{v}"].iloc[0]) for v in variants]
-            avg = sum(a["score"] - c["score"] for a, c in pairs) / len(pairs)
-            st.markdown(
-                f"On this scenario the model prefers **{'agreeing' if avg > 0 else 'correcting'}**"
-                f", by `{abs(avg):.3f}` logits."
-            )
-            shown_a, shown_c = pairs[0]
-            side_by_side("Agrees with the user", shown_a["text"], shown_a["score"],
-                         "Corrects the user", shown_c["text"], shown_c["score"], diff=False)
-            if len(pairs) > 1:
-                st.caption(
-                    f"One of the {len(pairs)} ways this scenario is worded. All of them are "
-                    "scored, and the number above is their average, which is why it does not "
-                    "equal the difference between the two scores shown."
+        # One panel, one selection: the chart, the reading of it and the scored text are
+        # all driven by the control at the top of this box. With a "####" heading of its
+        # own the drill-down read as an independent section, and nothing said which
+        # choice it was following.
+        with st.container(border=True, key="chain_sycophancy"):
+            pick = st.selectbox("How hard the user pushes", viz.LADDER,
+                                index=viz.LADDER.index(slope["level"]),
+                                format_func=lambda k: f"The user {viz.LADDER_LABEL[k]}",
+                                help="Everything in this panel, the chart and the scored text "
+                                     "below it, follows this choice.")
+            lvl = by_level[pick]
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.plotly_chart(viz.sycophancy_scenarios(sy["arms"], pick), width="stretch",
+                                config={"displayModeBar": False})
+            with c2:
+                st.metric("Reward for agreeing", f"{lvl['mean_delta']:+.2f} logits",
+                          delta=f"agreement wins on {lvl['win_rate']:.0%} of scenarios",
+                          delta_color="off")
+                st.markdown(
+                    f"95% interval `{lvl['ci_low']:+.2f}` to `{lvl['ci_high']:+.2f}`, "
+                    f"p = `{lvl['p_sign']:.3f}` across {lvl['n_items']} scenarios. "
+                    + ("The model leans toward agreeing at this level."
+                       if lvl["mean_delta"] > 0 else
+                       "The model still prefers correcting at this level.")
                 )
+                st.caption(
+                    "Each dot is one scenario, red where agreeing scored higher and green where "
+                    "correcting did. A mean can come from every scenario leaning the same way or from "
+                    "a few extremes, and those mean different things for a policy trained on it."
+                )
+                st.caption(
+                    f"Agreements run about {abs(m['mean_token_delta']):.0f} tokens shorter than "
+                    "corrections, because a correction has to explain itself. Adjusting for that "
+                    f"leaves the agreement effect at {sy['length_adjusted']['agrees']['coef']:+.2f} "
+                    "logits overall, so it is not a length artifact."
+                )
+
+            # ---- the exact text ----------------------------------------------------------------
+            st.markdown(f"##### Read the exact text, when the user {viz.LADDER_LABEL[pick]}")
+            st.caption("The scenarios behind the chart above, still at the level of pressure "
+                       "chosen at the top of this panel.")
+            with st.expander(f"See the responses when the user {viz.LADDER_LABEL[pick]}",
+                             icon=":material/article:", expanded=True, key="drill_sycophancy"):
+                arms = pd.DataFrame(sy["arms"])
+                topics = dict(zip(arms["scenario_id"], arms["topic"]))
+                s_opts, s_fmt = labelled(topics, topics)
+                sid = st.selectbox("Scenario", s_opts, format_func=s_fmt)
+                sub = arms[(arms["scenario_id"] == sid) & (arms["insistence"] == pick)]
+                st.markdown("**The user says:**")
+                st.markdown(f'<div class="txtbox">{html.escape(sub.iloc[0]["question"])}</div>',
+                            unsafe_allow_html=True)
+                # Each scenario is written more than one way and the reported premium averages them,
+                # so quote that average rather than either pair's own delta, which would match nothing
+                # else on the tab. Showing every pair forced a label ("version 1 of 2") that told the
+                # reader nothing about what separated them.
+                variants = sorted({c.split("_", 1)[1] for c in sub["cell"]
+                                   if c.startswith("agrees_")}, reverse=True)
+                pairs = [(sub[sub["cell"] == f"agrees_{v}"].iloc[0],
+                          sub[sub["cell"] == f"corrects_{v}"].iloc[0]) for v in variants]
+                avg = sum(a["score"] - c["score"] for a, c in pairs) / len(pairs)
+                st.markdown(
+                    f"On this scenario the model prefers **{'agreeing' if avg > 0 else 'correcting'}**"
+                    f", by `{abs(avg):.3f}` logits."
+                )
+                shown_a, shown_c = pairs[0]
+                side_by_side("Agrees with the user", shown_a["text"], shown_a["score"],
+                             "Corrects the user", shown_c["text"], shown_c["score"], diff=False)
+                if len(pairs) > 1:
+                    st.caption(
+                        f"One of the {len(pairs)} ways this scenario is worded. All of them are "
+                        "scored, and the number above is their average, which is why it does not "
+                        "equal the difference between the two scores shown."
+                    )
 
 
 # --------------------------------------------------------------------------------------
@@ -823,8 +896,17 @@ with tabs[3]:
     else:
         items = module_items(R, "style", group="content_neutral")
         bearing = module_items(R, "style", group="quality_bearing")
+        # The filler-versus-information control is a check on the model, not a transform applied to
+        # an answer, so it is neither charted nor part of the verdict about transforms. It has its
+        # own section below. The overview tile counts both, so the hint says where the rest is.
+        check_items = module_items(R, "style", group="quality_control")
+        # The verdict covers both, so this tab's count and band are the tile's. The check stays out
+        # of the charts because it is not a transform, and the hint says where to find it.
         st.markdown(verdict_line(
-            items, "style", "surface style is rewarded for its own sake", extra="Effects are shown after removing what the extra length alone explains."),
+            items + check_items, "style", "surface style is rewarded for its own sake",
+            extra="Effects are shown after removing what the extra length alone explains. The "
+                  "substance check counts here too; it is not a transform, so it is not one of the "
+                  "bars below but a section of its own further down."),
             unsafe_allow_html=True)
 
         st.markdown("#### Which styles the model rewards")
@@ -833,7 +915,7 @@ with tabs[3]:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Style that adds no information**")
-            st.caption("Any reward at all here is unearned, so these are bias claims.")
+            st.caption("Same answer, repackaged, so any reward here is a fault.")
             st.plotly_chart(
                 viz.bias_bars(items, signed=True, xmax=shared_max,
                               bad_label="rewarded though it adds nothing",
@@ -841,7 +923,8 @@ with tabs[3]:
                 width="stretch", config={"displayModeBar": False})
         with c2:
             st.markdown("**Style that might genuinely improve the answer**")
-            st.caption("Rewarding these would not be a fault, so they are preferences, not bias.")
+            st.caption("These change the answer itself, so a reward can be deserved: "
+                       "preferences, not faults.")
             st.plotly_chart(
                 viz.bias_bars(bearing, signed=True, fault=False, xmax=shared_max),
                 width="stretch", config={"displayModeBar": False})
@@ -852,48 +935,79 @@ with tabs[3]:
             "curve below, and every effect above is measured against that curve."
         )
 
-        # ---- the quality control: a finding, not methodology, so it stays in the flow -------
-        pv = sm.get("padding_vs_elaboration", [])
-        if pv:
-            b = pv[0]
-            good = b["mean_delta"] > 0
-            st.markdown("#### Does it read substance, or count tokens?")
-            c1, c2 = st.columns([1, 2])
-            c1.metric("Genuine information versus filler, at matched length",
-                      f"{b['mean_delta']:+.2f} logits",
-                      delta=f"wins on {b['win_rate']:.0%} of questions", delta_color="off")
-            c2.markdown(
-                "Two answers, matched to within "
-                f"{b['mean_length_mismatch']:.0f} tokens of each other. One adds real "
-                "information, the other adds content-free filler. "
-                + ("The model prefers the real information, so it is reading substance rather "
-                   "than counting tokens. This is the internal check that the length adjustment "
-                   "below is not hiding a quality effect."
-                   if good else
-                   "The model cannot tell them apart, so it is rewarding length rather than "
-                   "substance.")
-            )
+        # ---- the check on the scorer itself, after the transforms it validates ---------------
+        # Prose, pairing and row order all come from findings.substance_check, so this section and
+        # the one in the HTML report cannot answer the same question differently.
+        check = substance_check(sm, check_items)
+        if check:
+            st.markdown("#### Does added length have to carry information?")
+            st.markdown(f"**{check['lead']}** {check['body']}")
+            st.caption(check["setup"])
+            for col, row in zip(st.columns(len(check["rows"])), check["rows"]):
+                with col:
+                    st.metric(f"At +{row['added_tokens']:.0f} tokens"
+                              if row["added_tokens"] else "At matched length",
+                              f"{row['mean_delta']:+.2f} logits",
+                              delta=f"real information wins {row['win_rate']:.0%} of the time",
+                              delta_color="off")
+                    if row["item"] and row["ratio"]:
+                        st.markdown(
+                            fault_pill(row["item"], **viz.SUBSTANCE_LABELS)
+                            + f'&nbsp; <span class="sub">{row["ratio"]:.1f}x what rewording alone '
+                            f'could produce ({row["n_items"]} questions)</span>',
+                            unsafe_allow_html=True)
+            st.caption(check["counts"])
 
-        st.markdown("#### Read the exact text")
-        with st.expander("See a transformed answer beside the plain one",
-                         icon=":material/article:", expanded=True, key="drill_style"):
+        st.markdown("#### Inspect one style transform")
+        # One panel, one selection, as on the identity and sycophancy tabs: the transform is what
+        # the reader is inspecting, so it leads rather than sitting third inside the drill-down
+        # behind a question and above an intensity slider.
+        with st.container(border=True, key="chain_style"):
             arms = pd.DataFrame(sm["arms"])
-            questions = dict(zip(arms["question_id"], arms["question"]))
-            q_opts, q_fmt = labelled(arms["question_id"].unique(), questions)
-            qid = st.selectbox("Question", q_opts, format_func=q_fmt)
             groups = {k: v.replace("_", "-") for k, v in sm["transform_groups"].items()}
             t_opts, t_fmt = labelled(set(arms["transform"]) - {"baseline"}, groups)
-            tname = st.selectbox("Transform", t_opts, format_func=t_fmt)
-            sub = arms[(arms["question_id"] == qid) & (arms["transform"] == tname)]
-            base = arms[(arms["question_id"] == qid)
-                        & (arms["transform"] == "baseline")].iloc[0]
-            dose = st.select_slider("Intensity", options=sorted(sub["dose"].unique()))
-            row = sub[sub["dose"] == dose].iloc[0]
-            st.markdown(f"**Prompt:** {html.escape(row['question'])}")
-            side_by_side("Plain answer", base["text"], base["score"],
-                         f"With {tname} at intensity {dose}", row["text"], row["score"])
-            st.caption(f"{base['n_answer_tokens']} to {row['n_answer_tokens']} tokens · "
-                       f"score change {row['score'] - base['score']:+.3f}")
+            # Opens on the biggest effect, as the other two tabs do, rather than on whatever sorts
+            # first alphabetically.
+            ranked = sorted((i for i in items + bearing if i["label"] in t_opts),
+                            key=lambda i: -(i.get("ratio") or 0))
+            tname = st.selectbox("Which transform", t_opts, format_func=t_fmt,
+                                 index=t_opts.index(ranked[0]["label"]) if ranked else 0,
+                                 help="Everything in this panel, the reading of it and the scored "
+                                      "text below, follows this choice.")
+            picked = next((i for i in items + bearing if i["label"] == tname), None)
+            if picked and picked.get("ratio") is not None:
+                st.markdown(
+                    f"Length-adjusted, at maximum intensity **{tname}** is worth "
+                    f"`{picked['effect']:+.2f}` logits, which is {picked['ratio']:.1f} times what "
+                    f"rewording alone could produce across the same {picked['n_items']} questions."
+                    + ("" if picked.get("confirmed") else
+                       " It did not reach significance, so treat the direction as unresolved.")
+                )
+            elif tname == "padding":
+                st.markdown(
+                    "**padding** has no adjusted effect of its own: content-free filler at four "
+                    "intensities *is* the reward-versus-length curve, so it is the ruler every "
+                    "other transform is measured against rather than a transform in its own right."
+                )
+
+            st.markdown(f"##### Read the exact text for {html.escape(tname)}")
+            st.caption(f"The scored answers behind the numbers above, still for the **{tname}** "
+                       "transform chosen at the top of this panel.")
+            with st.expander("See a transformed answer beside the plain one",
+                             icon=":material/article:", expanded=True, key="drill_style"):
+                questions = dict(zip(arms["question_id"], arms["question"]))
+                q_opts, q_fmt = labelled(arms["question_id"].unique(), questions)
+                qid = st.selectbox("Question", q_opts, format_func=q_fmt)
+                sub = arms[(arms["question_id"] == qid) & (arms["transform"] == tname)]
+                base = arms[(arms["question_id"] == qid)
+                            & (arms["transform"] == "baseline")].iloc[0]
+                dose = st.select_slider("Intensity", options=sorted(sub["dose"].unique()))
+                row = sub[sub["dose"] == dose].iloc[0]
+                st.markdown(f"**Prompt:** {html.escape(row['question'])}")
+                side_by_side("Plain answer", base["text"], base["score"],
+                             f"With {tname} at intensity {dose}", row["text"], row["score"])
+                st.caption(f"{base['n_answer_tokens']} to {row['n_answer_tokens']} tokens · "
+                           f"score change {row['score'] - base['score']:+.3f}")
 
 
         # ---- everything about length, consolidated and out of the way -----------------------
@@ -949,7 +1063,8 @@ with tabs[4]:
         if exploits:
             best = exploits[0]
             st.markdown(
-                f'<div class="verdict"><b>Yes, this model can be reward hacked.</b> '
+                f'<div class="verdict{banner_class(severity["reward_hacking"]["band"])}">'
+                f'<b>Yes, this model can be reward hacked.</b> '
                 f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
                 f'<b>{best["lift"]:+.2f} logits</b> and makes it outscore a genuine answer to the '
                 f'same prompt <b>{best["asr"]["p50"]:.0%}</b> of the time, against '
@@ -1241,10 +1356,6 @@ with tabs[6]:
         if noise:
             st.plotly_chart(viz.noise_floor_hist(noise), width="stretch",
                             config={"displayModeBar": False})
-            def _tiny(v: float) -> str:
-                # "0e+00" is technically right and reads like a glitch.
-                return "exactly 0" if v == 0 else f"{v:.0e}"
-
             st.caption(
                 f"Scoring the same pair twice differs by **{_tiny(noise['determinism_delta'])}**, "
                 "and scoring it alone rather than inside a batch by "

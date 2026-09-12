@@ -158,6 +158,39 @@ def finding_labels(findings: list[dict]) -> list[str]:
 MAX_ROWS = 16
 
 
+def _unconfirmed_fault(f: dict) -> bool:
+    """A vulnerability that did not reach significance: real-looking, but counting toward nothing.
+
+    Restricted to vulnerabilities on purpose. The directional modules test one-sided toward the
+    fault, so a finding running the healthy way is unconfirmed by construction rather than by
+    being weak.
+    """
+    return f.get("valence") == "vulnerability" and not f.get("confirmed")
+
+
+def _finding_bars(rows, name: str, color: str, *, hatched: bool = False,
+                  showlegend: bool = True) -> go.Bar:
+    """One bar trace of (label, value, finding) rows, solid or hatched throughout.
+
+    fillmode is load-bearing. Plotly defaults it to "replace", which makes ``marker.color`` the
+    colour of the *stripes* over a transparent background, so an explicit white fgcolor painted
+    the whole bar white and the row rendered empty. "overlay" keeps ``marker.color`` as the fill
+    and draws the stripes on top of it.
+    """
+    return go.Bar(
+        y=[r[0] for r in rows], x=[r[1] for r in rows], orientation="h", width=0.62,
+        name=name, showlegend=showlegend,
+        marker=dict(color=color,
+                    pattern=dict(shape="/" if hatched else "", fillmode="overlay",
+                                 fgcolor="#ffffff", size=5, solidity=0.32)),
+        customdata=[[r[2]["effect"], r[2]["systematic_bar"], r[2].get("n_items") or 0]
+                    for r in rows],
+        hovertemplate="<b>%{y}</b><br>%{customdata[0]:+.2f} logits"
+                      "<br>%{x:.1f}x what rewording alone could produce"
+                      " (%{customdata[1]:.2f} over %{customdata[2]} comparisons)"
+                      "<extra></extra>")
+
+
 def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     """Every finding against what rewording alone could produce at its own sample size.
 
@@ -173,7 +206,9 @@ def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     fig = go.Figure()
     fig.add_vrect(x0=0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
     fig.add_vline(x=1, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=1, y=len(sel) - 0.4, text="as far as rewording alone gets",
+    # Anchored to the bottom row, not the top: the legend sits above the plot and a fourth entry
+    # wraps it onto a second line, straight through an annotation placed up there.
+    fig.add_annotation(x=1, y=-0.42, text="as far as rewording alone gets",
                        showarrow=False, xanchor="left", xshift=6,
                        font=dict(size=11, color=INK2))
 
@@ -183,20 +218,28 @@ def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     known = [v for v, _ in VALENCE_LEGEND]
     groups = VALENCE_LEGEND + [(v, str(v)) for v in dict.fromkeys(f.get("valence") for f in sel)
                                if v not in known]
+    hatch_listed = False
     for valence, name in groups:
         rows = [(lab, v, f) for lab, v, f in zip(labels, vals, sel)
                 if f.get("valence") == valence]
         if not rows:
             continue
-        fig.add_trace(go.Bar(
-            y=[r[0] for r in rows], x=[r[1] for r in rows], orientation="h", width=0.62,
-            name=name, marker=dict(color=VALENCE_COLOR.get(valence, INK2)),
-            customdata=[[r[2]["effect"], r[2]["systematic_bar"], r[2].get("n_items") or 0]
-                        for r in rows],
-            hovertemplate="<b>%{y}</b><br>%{customdata[0]:+.2f} logits"
-                          "<br>%{x:.1f}x what rewording alone could produce"
-                          " (%{customdata[1]:.2f} over %{customdata[2]} comparisons)"
-                          "<extra></extra>"))
+        color = VALENCE_COLOR.get(valence, INK2)
+        # Split by pattern as well as by valence. Plotly takes a trace's legend swatch from its
+        # first point, so a trace mixing solid and hatched bars showed "a vulnerability" as a
+        # hatched chip and the solid red most of its bars actually use appeared nowhere.
+        solid = [r for r in rows if not _unconfirmed_fault(r[2])]
+        hatched = [r for r in rows if _unconfirmed_fault(r[2])]
+        if solid:
+            fig.add_trace(_finding_bars(solid, name, color))
+        elif hatched:
+            # Every bar of this valence is hatched, so nothing would explain its colour.
+            fig.add_trace(go.Bar(y=[labels[0]], x=[None], orientation="h", width=0.62,
+                                 name=name, hoverinfo="skip", marker=dict(color=color)))
+        if hatched:
+            fig.add_trace(_finding_bars(hatched, "not statistically confirmed", color,
+                                        hatched=True, showlegend=not hatch_listed))
+            hatch_listed = True
     fig.update_traces(marker_cornerradius=4)
     _base(fig, height=height or max(300, 34 * len(sel) + 110), showlegend=True,
           xtitle="multiples of what rewording alone could produce")
@@ -588,9 +631,33 @@ def bias_state(item: dict, *, signed: bool) -> int:
     material = bool(item.get("material"))
     if not signed:
         return 0 if material else 1
-    if (item.get("effect") or 0) <= 0:
+    # Direction comes from the item's own `adverse` flag where it has one. `module_items` sets it
+    # from the effect's sign for every transform, so charts read as before, but the substance check
+    # is a comparison whose fault runs negative and the sign rule reads it backwards.
+    adverse = item.get("adverse")
+    if adverse is None:
+        adverse = (item.get("effect") or 0) > 0
+    if not adverse:
         return 2
     return 0 if material else 1
+
+
+# One phrasing of the two directions of the substance check, shared by both renderers: it is not a
+# transform, so the words the transform charts use ("penalised, the model resists it") describe the
+# wrong thing entirely on a model that passes it.
+SUBSTANCE_LABELS = dict(bad="filler scores higher", good="real information wins")
+
+
+def fault_chip(item: dict, *, bad: str, good: str) -> tuple[str, str]:
+    """The words and colour ``bias_bars`` would give this finding, for one shown outside a chart.
+
+    A finding presented beside those bars has to be marked by the same rule, or a reader cannot
+    count the two together: red there means a confirmed fault bigger than rewording alone, which is
+    exactly what the category tiles count, and is not the same question as which severity band it
+    lands in.
+    """
+    name, color = SIGNED_STATES[bias_state(item, signed=True)]
+    return name.format(bad=bad, good=good), color
 
 
 def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
