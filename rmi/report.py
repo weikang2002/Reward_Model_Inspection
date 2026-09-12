@@ -15,7 +15,7 @@ import plotly.io as pio
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
-from .findings import module_items, overview_verdict, tone_check, verdict_line
+from .findings import module_items, overview_verdict, self_check, tone_check, verdict_line
 from .textdiff import word_diff
 
 CSS = """
@@ -29,8 +29,9 @@ h2{font-size:21px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(-
 h3{font-size:16px;margin:26px 0 8px}
 .sub{color:var(--ink2);font-size:13.5px;margin:0 0 26px}
 .grid{display:grid;gap:14px;margin:14px 0}
-.g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)}
-@media(max-width:860px){.g3,.g4{grid-template-columns:1fr}}
+.g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:860px){.g2,.g3,.g4{grid-template-columns:1fr}}
 .yard{border-left:3px solid #2a78d6;background:#f4f8fe;border-radius:0 8px 8px 0;padding:12px 15px;
   font-size:13.5px;line-height:1.5}
 .yard .big{display:block;font-size:24px;font-weight:700;margin-bottom:3px}
@@ -64,7 +65,7 @@ del{background:#fbdada;text-decoration:line-through}
   padding:12px 16px;margin:2px 0 18px;font-size:15px;line-height:1.55}
 .verdict.clear{border-left-color:#0ca30c;background:#f2faf2}
 .verdict.mild{border-left-color:#fab219;background:#fdf6e8}
-.verdict .hint{display:block;color:#52514e;font-size:12.5px;margin-top:6px}
+.verdict .hint,.yard .hint{display:block;color:#52514e;font-size:12.5px;margin-top:6px}
 details{margin:10px 0}summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--ink2)}
 pre{background:#f0efec;padding:12px;border-radius:8px;overflow-x:auto;font-size:12px}
 """
@@ -122,7 +123,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     A(overview_verdict(R, cal))
 
     # -- yardsticks -------------------------------------------------------------------
-    A("<h2>Read every result against these two numbers</h2><div class='grid g3'>")
+    A("<h2>Read every result against these two numbers</h2><div class='grid g2'>")
     if noise:
         A(f"<div class='yard'><span class='big'>±{noise['pairwise_sd']:.2f} logits</span>"
           "spread between two <b>meaning-preserving rewrites</b> of the same answer. One "
@@ -135,16 +136,16 @@ def build(results: dict, out_path: Path | str) -> Path:
           "of the time this model agrees with <b>real human preference judgments</b> "
           f"({cal['n_pairs']} held-out pairs, 95% CI {cal['accuracy_ci'][0]:.1%} to "
           f"{cal['accuracy_ci'][1]:.1%}). Chance is 50%.</div>")
-    sc = R.get("sanity_check")
-    if sc:
-        ok = sc["passed"]
+    A("</div>")
+
+    # Outside the grid above: this is not a yardstick, nothing is measured against it.
+    if check := self_check(R):
+        ok = check["passed"]
         A(f"<div class='yard' style=\"border-left-color:"
           f"{viz.STATUS['good'] if ok else viz.STATUS['critical']};"
           f"background:{'#f2faf2' if ok else '#fdf3f3'}\">"
-          f"<span class='big'>{'Passes' if ok else 'FAILS'}</span>"
-          "the model card's own worked example: it should prefer a supportive reply to an abusive "
-          f"one. Margin {sc['margin']:+.2f} logits.</div>")
-    A("</div>")
+          f"<b>{html.escape(check['headline'])}</b>"
+          f"<span class='hint'>{html.escape(check['detail'])}</span></div>")
 
     # -- severity ---------------------------------------------------------------------
     A("<h2>Where the problems are</h2><div class='grid g4'>")

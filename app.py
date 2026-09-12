@@ -19,9 +19,10 @@ import streamlit as st
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
-from rmi.findings import module_items, overview_verdict, tone_check, verdict_line
+from rmi.findings import (module_items, overview_verdict, self_check, tone_check,
+                          verdict_line)
 from rmi.report import build as build_report
-from rmi.scoring import ModelTooLargeError, check_download_size
+from rmi.scoring import ModelTooLargeError, RewardModel, check_download_size
 from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
 
@@ -471,7 +472,7 @@ with tabs[0]:
     st.markdown(overview_verdict(R, cal), unsafe_allow_html=True)
 
     st.markdown("#### What everything below is measured against")
-    y1, y2, y3 = st.columns(3)
+    y1, y2 = st.columns(2)
     with y1:
         st.metric("Wording noise", f"±{noise['pairwise_sd']:.2f} logits" if noise else "n/a",
                   help="Spread between two meaning-preserving rewrites of the same answer. "
@@ -492,12 +493,14 @@ with tabs[0]:
         else:
             st.metric("Agrees with human preferences", "not measured")
             st.caption("Re-run with the human-preference check enabled to fill this in.")
-    with y3:
-        sc = R.get("sanity_check")
-        if sc:
-            st.metric("Model card's own example", "Passes" if sc["passed"] else "FAILS",
-                      delta=f"{sc['margin']:+.2f} logits", delta_color="normal")
-            st.caption("It should prefer a supportive reply to an abusive one.")
+
+    # Below the yardsticks rather than beside them: nothing here is measured against it. See
+    # findings.self_check for why it is on the front page at all.
+    if check := self_check(R):
+        box = st.success if check["passed"] else st.error
+        box(check["headline"], icon=":material/check_circle:" if check["passed"]
+            else ":material/report:")
+        st.caption(check["detail"])
 
     # ---- where ------------------------------------------------------------------------------
     st.markdown("#### Where the problems are")
@@ -1094,7 +1097,7 @@ with tabs[5]:
         severity_tiles(severity, other=o_sev, names=(A_name, B_name))
 
         # ---- head to head ---------------------------------------------------------------------
-        st.markdown("#### The two yardsticks, per model")
+        st.markdown("#### The two yardsticks, and the self-check")
         c1, c2 = st.columns(2)
         for col, res, name in ((c1, R, A_name), (c2, O, B_name)):
             with col:
@@ -1107,8 +1110,13 @@ with tabs[5]:
                 st.metric("Rewording noise, median",
                           f"{res['noise_floor']['median_abs_delta']:.2f} logits")
                 # "normal" keeps a negative margin red, which is what a failure should look like.
-                st.metric("Model card example", "Passes" if sk.get("passed") else "FAILS",
-                          delta=f"{sk.get('margin', 0):+.2f} logits", delta_color="normal")
+                passed = sk.get("passed")
+                st.metric("Prefers support over abuse",
+                          "n/a" if passed is None else ("Passes" if passed else "FAILS"),
+                          delta=f"{sk.get('margin', 0):+.2f} logits", delta_color="normal",
+                          help="The worked example from the OpenAssistant model card. A model "
+                               "that scores the abusive reply higher would pay a policy to be "
+                               "abusive.")
 
         # ---- the detail, below the fold --------------------------------------------------------
         sa = {a["transform"]: a for a in (R.get("style") or {}).get("adjusted", [])}
@@ -1255,6 +1263,22 @@ with tabs[6]:
             )
 
     st.markdown("#### Every stimulus")
+    # Gated the same way as the overview block, so a stub scan does not advertise texts it
+    # never scored.
+    if (sc := R.get("sanity_check")) and sc.get("passed") is not None:
+        with st.expander("The self-check shown on the overview \u2014 model card worked example"):
+            st.caption(f"Source: {sc['source']}. Both replies answer the same question, so the "
+                       "two scores are directly comparable.")
+            st.markdown(f'<div class="txtbox"><b>Question.</b> '
+                        f'{html.escape(RewardModel.CARD_QUESTION)}</div>',
+                        unsafe_allow_html=True)
+            k1, k2 = st.columns(2)
+            k1.metric("Supportive reply", f"{sc['helpful_score']:.2f}")
+            k1.markdown(f'<div class="txtbox">{html.escape(RewardModel.CARD_HELPFUL)}</div>',
+                        unsafe_allow_html=True)
+            k2.metric("Abusive reply", f"{sc['rude_score']:.2f}")
+            k2.markdown(f'<div class="txtbox">{html.escape(RewardModel.CARD_RUDE)}</div>',
+                        unsafe_allow_html=True)
     base = Path("rmi/corpora")
     for name, label in [("style_corpus.json", "Factual corpus, transforms and paraphrases"),
                         ("sycophancy.json", "Sycophancy scenarios"),

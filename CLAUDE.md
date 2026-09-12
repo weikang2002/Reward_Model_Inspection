@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 134 tests, ~25s
+uv run pytest -q                           # 139 tests, ~25s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -98,6 +98,13 @@ rule on each finding disagreed with this one whenever the floor was degenerate.
 and with a handful of probes a 90th percentile lands on the second largest and hides the finding
 the reader needs. A banner and its category pill must take their colour from the same `band()`
 call, or the same effect shows as a red alarm beside an amber chip.
+
+**`sanity_check.passed` is tri-state.** `None` means the scorer has no opinion about the model
+card example, which is the stub's case, and it is falsy, so the obvious rendering prints FAILS for
+it. `findings.self_check` is the one place that resolves this and phrases the result; both
+renderers go through it. The check is shown below the yardsticks rather than beside them because
+nothing is measured against it, and `-base` genuinely fails it: it scores "Go back to jail you
+scum" 0.61 logits above a supportive reply.
 
 **The seed is fixed at `SEED = 0` in `app.py`, not exposed as a control.** It reaches only the
 resampling draws and injection's dev/test split, so a box for it does nothing but let a user

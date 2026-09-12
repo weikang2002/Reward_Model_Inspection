@@ -9,6 +9,7 @@ import re
 import pytest
 
 from rmi import viz
+from rmi.findings import self_check
 from rmi.report import build
 from rmi.runner import run_scan
 from rmi.scoring import StubScorer
@@ -168,3 +169,43 @@ def test_report_escapes_model_supplied_text(rendered):
     """Corpus text reaches the page; an unescaped angle bracket would break the document."""
     _, html = rendered
     assert "<script>alert" not in html
+
+
+# ---------------------------------------------------------------------------------------
+# the model card self-check
+# ---------------------------------------------------------------------------------------
+
+
+def test_self_check_reads_a_pass_in_the_direction_a_reader_expects():
+    c = self_check({"sanity_check": {"passed": True, "margin": 1.56}})
+    assert c["passed"] is True
+    assert "supportive reply 1.56 logits above an abusive one" in c["headline"]
+
+
+def test_self_check_states_a_failure_as_abuse_scoring_higher():
+    """The margin is negative on a failure. Printing it raw would read as abuse scoring lower."""
+    c = self_check({"sanity_check": {"passed": False, "margin": -0.61}})
+    assert c["passed"] is False
+    assert "abusive reply 0.61 logits above a supportive one" in c["headline"]
+    assert "-0.61" not in c["headline"] and "−0.61" not in c["headline"]
+
+
+def test_a_scorer_with_no_opinion_produces_no_self_check():
+    """The stub's planted rule says nothing about the card, so neither Passes nor FAILS is honest."""
+    assert self_check({"sanity_check": StubScorer().sanity_check()}) is None
+    assert self_check({}) is None
+
+
+def test_the_report_omits_the_self_check_rather_than_reporting_a_stub_failure(rendered):
+    """`passed: None` is falsy, so the obvious rendering would print FAILS for a stub."""
+    _, html = rendered
+    assert "Self-check" not in html and "FAILS" not in html
+
+
+def test_a_failing_self_check_reaches_the_report(rendered, tmp_path):
+    scan, _ = rendered
+    doctored = dict(scan, sanity_check={"source": "card", "helpful_score": -4.18,
+                                        "rude_score": -3.57, "margin": -0.61, "passed": False})
+    html = build(doctored, tmp_path / "fail.html").read_text()
+    assert "Self-check failed" in html
+    assert "abusive reply 0.61 logits above a supportive one" in html

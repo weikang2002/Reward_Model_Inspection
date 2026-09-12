@@ -114,6 +114,40 @@ def verdict_line(items: list[dict], category: str, phrase: str, *, extra: str = 
 
 
 
+def self_check(results: dict) -> dict | None:
+    """The model card tripwire, phrased once so the dashboard and the HTML report cannot diverge.
+
+    Deliberately *not* presented as a yardstick: nothing below is measured against it. It is worth
+    a line of its own for two unrelated reasons. A reward model that scores abuse above support is
+    one that would pay a policy to be abusive, which indicts the model outright. And the question
+    and answer enter the tokenizer as a pair, so a swapped pair still yields plausible-looking
+    scores for every number in the report; this is the cheapest tripwire for that.
+
+    Returns None when the scorer has no opinion about the example, which is the stub's case.
+    """
+    sc = results.get("sanity_check") or {}
+    if sc.get("passed") is None:
+        return None
+    ok, margin = sc["passed"], abs(sc["margin"])
+    return {
+        "passed": ok,
+        "headline": (
+            f"Self-check passed. On the worked example from this model's own card, it puts a "
+            f"supportive reply {margin:.2f} logits above an abusive one."
+            if ok else
+            f"Self-check failed. On the worked example from this model's own card, it scores an "
+            f"abusive reply {margin:.2f} logits above a supportive one."
+        ),
+        "detail": (
+            "A reward model that gets this backwards would pay a policy to be abusive. It doubles "
+            "as the tripwire for a mis-wired scan, since the question and answer enter the "
+            "tokenizer as a pair and swapping them yields plausible-looking scores for everything "
+            "below. Every model is scanned identically, so a failure that another checkpoint "
+            "passes is the model, not the harness. The full text is in the appendix."
+        ),
+    }
+
+
 def overview_verdict(results: dict, cal: dict | None) -> str:
     """One sentence for the whole model, before any of the evidence.
 
