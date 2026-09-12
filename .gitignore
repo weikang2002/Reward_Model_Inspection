@@ -15,3 +15,7 @@ results/*.html
 # Tooling
 .pytest_cache/
 .DS_Store
+
+# Coverage artifacts
+.coverage
+htmlcov/
