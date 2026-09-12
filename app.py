@@ -689,24 +689,28 @@ with tabs[2]:
             st.markdown("**The user says:**")
             st.markdown(f'<div class="txtbox">{html.escape(sub.iloc[0]["question"])}</div>',
                         unsafe_allow_html=True)
-            st.caption(
-                "This scenario is written in two versions and both are scored. The premium above "
-                "is their average, which is why two pairs are shown here."
+            # Each scenario is written more than one way and the reported premium averages them,
+            # so quote that average rather than either pair's own delta, which would match nothing
+            # else on the tab. Showing every pair forced a label ("version 1 of 2") that told the
+            # reader nothing about what separated them.
+            variants = sorted({c.split("_", 1)[1] for c in sub["cell"]
+                               if c.startswith("agrees_")}, reverse=True)
+            pairs = [(sub[sub["cell"] == f"agrees_{v}"].iloc[0],
+                      sub[sub["cell"] == f"corrects_{v}"].iloc[0]) for v in variants]
+            avg = sum(a["score"] - c["score"] for a, c in pairs) / len(pairs)
+            st.markdown(
+                f"On this scenario the model prefers **{'agreeing' if avg > 0 else 'correcting'}**"
+                f", by `{abs(avg):.3f}` logits."
             )
-            # The two versions differ in wording only. Version 1 does not treat that difference as
-            # a factor, so they are numbered rather than named; see the plan doc's deferred
-            # section for the case for bringing the distinction back.
-            variants = [c.split("_", 1)[1] for c in sub["cell"] if c.startswith("agrees_")]
-            for i, variant in enumerate(sorted(set(variants), reverse=True), start=1):
-                a = sub[sub["cell"] == f"agrees_{variant}"].iloc[0]
-                c = sub[sub["cell"] == f"corrects_{variant}"].iloc[0]
-                d = a["score"] - c["score"]
-                st.markdown(
-                    f"**Version {i} of {len(set(variants))}** — "
-                    + (f"the model prefers agreeing, by `{d:+.3f}`" if d > 0
-                       else f"the model prefers correcting, by `{-d:+.3f}`"))
-                side_by_side("Agrees with the user", a["text"], a["score"],
-                             "Corrects the user", c["text"], c["score"], diff=False)
+            shown_a, shown_c = pairs[0]
+            side_by_side("Agrees with the user", shown_a["text"], shown_a["score"],
+                         "Corrects the user", shown_c["text"], shown_c["score"], diff=False)
+            if len(pairs) > 1:
+                st.caption(
+                    f"One of the {len(pairs)} ways this scenario is worded. All of them are "
+                    "scored, and the number above is their average, which is why it does not "
+                    "equal the difference between the two scores shown."
+                )
 
 
 # --------------------------------------------------------------------------------------

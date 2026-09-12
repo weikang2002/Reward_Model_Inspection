@@ -384,3 +384,24 @@ def test_an_indifferent_model_yields_no_working_attack(small_corpus):
     """With no affix able to move the score, nothing should be reported as having worked."""
     res = inj.run(StubScorer(rule="constant"), small_corpus, n_boot=100, seed=0)
     assert res["summary"]["top_exploits"] == []
+
+
+def test_premium_by_level_is_the_mean_of_the_per_wording_premiums():
+    """The drill-down quotes this number beside a single wording's text, so it must be the average.
+
+    If it drifted from the per-wording premiums, the figure shown next to a pair of answers would
+    not equal anything else on the tab and could not be checked against the text.
+    """
+    res = sym.run(StubScorer(rule="length", coef=0.03), n_boot=100, seed=0, reg_boot=50)
+    by_level = {p["insistence"]: p["mean_delta"] for p in res["premium_by_level"]}
+    for level, avg in by_level.items():
+        per_wording = [p["mean_delta"] for p in res["premiums"] if p["insistence"] == level]
+        assert avg == pytest.approx(sum(per_wording) / len(per_wording), abs=1e-9), level
+
+
+def test_every_scenario_contributes_one_observation_per_level():
+    """Averaging within a scenario before contrasting is what keeps the clustering right."""
+    res = sym.run(StubScorer(rule="length", coef=0.03), n_boot=100, seed=0, reg_boot=50)
+    for p in res["premium_by_level"]:
+        assert p["n_items"] == res["n_scenarios"]
+        assert p["n_clusters"] == res["n_scenarios"]
