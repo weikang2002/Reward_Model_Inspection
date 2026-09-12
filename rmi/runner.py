@@ -271,7 +271,6 @@ def rank_findings(results: dict, cal: calib.Calibration | None, nf=None) -> list
             "category": category, "title": title, "effect": effect,
             "noise_percentile": noise_pct, "p_adjusted": p_adj, "p_raw": p_raw,
             "confirmed": confirmed, "valence": valence,
-            "band": sev.band(noise_pct, confirmed=confirmed),
             "detail": detail,
         }
         # Judged at its own sample size: wording noise cancels as 1/sqrt(n), so what counts as a
@@ -282,6 +281,9 @@ def rank_findings(results: dict, cal: calib.Calibration | None, nf=None) -> list
             # Only a finite bar is meaningful; severity.is_material is the one place that decides
             # what counts as material, from this number.
             f["systematic_bar"] = bar if np.isfinite(bar) else None
+        # After the bar, never before: the band is a multiple of it. Reading noise_percentile
+        # here instead put a 0-100 number through thresholds that run 0/1/2/4.
+        f["band"] = sev.finding_band(f)
         if cal is not None and cal.fitted and effect is not None:
             f["preference_probability"] = cal.probability(abs(effect))
             f["genuine_gap_percentile"] = cal.gap_percentile(effect)
@@ -458,6 +460,8 @@ def migrate(results: dict) -> dict:
     # the stored copy can drift from the current thresholds. Rebuilding it here keeps the block
     # honest for anyone reading the JSON directly.
     if results.get("findings") is not None:
+        for f in results["findings"]:
+            f["band"] = sev.finding_band(f)
         results["severity"] = sev.summarise_all(results["findings"])
     return results
 

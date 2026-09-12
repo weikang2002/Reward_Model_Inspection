@@ -10,6 +10,7 @@ import math
 import numpy as np
 import pytest
 
+from rmi import calibration as calib
 from rmi.calibration import Calibration, _reliability, parse_hh_example, uncalibrated
 from rmi.scoring import DEFAULT_MAX_LENGTH, PROMPT_FORMAT, Scored, ScoreCache, StubScorer
 
@@ -221,3 +222,123 @@ def test_an_unknown_prompt_format_is_refused_before_anything_is_downloaded(monke
                         lambda *a, **k: pytest.fail("must not reach the Hub"))
     with pytest.raises(ValueError, match="unknown prompt format"):
         scoring.RewardModel("any/model", prompt_format="klingon")
+
+
+# ---------------------------------------------------------------------------------------
+# temperature fit and reliability
+# ---------------------------------------------------------------------------------------
+
+
+class FakeDataset:
+    """Enough of a datasets.Dataset for calibration.fit: len() and integer indexing."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, i):
+        return self.rows[i]
+
+
+class PlantedScorer:
+    """Scores an answer by a number embedded in its text, so gaps are known exactly."""
+
+    def score(self, pairs):
+        return [float(a.rsplit("|", 1)[1]) for _, a in pairs]
+
+
+def _fake_hh(monkeypatch, gaps):
+    """A dataset of single-turn transcripts whose score gaps are exactly `gaps`."""
+    rows = [{"chosen": f"\n\nHuman: q{i}\n\nAssistant: yes|{g:.6f}",
+             "rejected": f"\n\nHuman: q{i}\n\nAssistant: no|0.0"}
+            for i, g in enumerate(gaps)]
+    import datasets
+    monkeypatch.setattr(datasets, "load_dataset", lambda *a, **k: FakeDataset(rows))
+
+
+def _bradley_terry_gaps(true_t, n, seed=0):
+    """Gaps from a model that really is Bradley-Terry at `true_t`.
+
+    The human picks the chosen answer, so the observed gap is the score margin signed by whether
+    the model agreed, and it agrees with probability sigmoid(margin / T).
+    """
+    rng = np.random.default_rng(seed)
+    margin = np.abs(rng.normal(0.0, 3.0, size=n))
+    agrees = rng.random(n) < 1.0 / (1.0 + np.exp(-margin / true_t))
+    return np.where(agrees, margin, -margin)
+
+
+def test_the_fit_recovers_the_temperature_that_minimises_the_loss(monkeypatch):
+    """Every preference probability in the dashboard is read off this one number."""
+    true_t = 2.5
+    gaps = _bradley_terry_gaps(true_t, 6000, seed=0)
+    _fake_hh(monkeypatch, gaps)
+    cal = calib.fit(PlantedScorer(), n_pairs=6000, seed=0)
+
+    assert cal.fitted
+    assert cal.temperature == pytest.approx(true_t, rel=0.15), cal.temperature
+    # and it is genuinely the minimum, not merely close to the planted value
+    grid = np.linspace(cal.temperature * 0.5, cal.temperature * 1.5, 41)
+    loss = [float(np.mean(np.log1p(np.exp(-np.clip(cal.gaps / t, -50, 50))))) for t in grid]
+    assert cal.log_loss <= min(loss) + 1e-6
+
+
+def test_scores_carrying_no_preference_signal_fit_a_huge_temperature(monkeypatch):
+    """Gaps symmetric about zero mean the scores say nothing, and the fit should say so.
+
+    A large temperature is the honest answer: it flattens every reported preference probability
+    to a half, rather than dressing noise up as a confident preference.
+    """
+    rng = np.random.default_rng(3)
+    _fake_hh(monkeypatch, rng.normal(0.0, 3.0, size=3000))
+    cal = calib.fit(PlantedScorer(), n_pairs=3000, seed=0)
+    assert cal.temperature > 20, cal.temperature
+    assert cal.probability(1.0) == pytest.approx(0.5, abs=0.05)
+
+
+def test_accuracy_is_the_share_of_pairs_the_model_ranks_the_human_way(monkeypatch):
+    gaps = np.array([1.0, 2.0, -1.0, 3.0, -0.5] * 20)
+    _fake_hh(monkeypatch, gaps)
+    cal = calib.fit(PlantedScorer(), n_pairs=100, seed=0)
+    assert cal.accuracy == pytest.approx(0.6)
+    assert cal.accuracy_ci[0] < 0.6 < cal.accuracy_ci[1]
+    assert cal.n_pairs == 100
+
+
+def test_a_missing_dataset_degrades_to_raw_log_odds_rather_than_raising(monkeypatch):
+    import datasets
+    monkeypatch.setattr(datasets, "load_dataset",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    cal = calib.fit(PlantedScorer(), n_pairs=10)
+    assert cal.fitted is False
+    assert cal.temperature == 1.0
+    assert "unavailable" in cal.note
+
+
+def test_too_few_usable_pairs_is_reported_rather_than_fitted_on_noise(monkeypatch):
+    _fake_hh(monkeypatch, np.array([1.0] * 5))
+    cal = calib.fit(PlantedScorer(), n_pairs=5)
+    assert cal.fitted is False
+    assert "too few" in cal.note
+
+
+def test_the_reliability_diagram_is_honest_about_a_calibrated_model(monkeypatch):
+    """A well-fitted model's observed accuracy should track its predicted confidence."""
+    rng = np.random.default_rng(1)
+    gaps = rng.logistic(loc=0.0, scale=2.0, size=6000)
+    _fake_hh(monkeypatch, gaps)
+    cal = calib.fit(PlantedScorer(), n_pairs=6000, seed=0)
+    assert len(cal.reliability) >= 4
+    for b in cal.reliability:
+        assert abs(b["predicted"] - b["observed"]) < 0.12, b
+        assert b["n"] >= 5
+
+
+def test_probability_reads_a_delta_through_the_fitted_temperature():
+    c = calib.Calibration(temperature=2.0, accuracy=0.6, accuracy_ci=(0.5, 0.7), n_pairs=10,
+                          gaps=np.array([1.0]), reliability=[], log_loss=0.5)
+    assert c.probability(0.0) == pytest.approx(0.5)
+    assert c.probability(2.0) == pytest.approx(1 / (1 + math.exp(-1.0)))
+    assert c.probability(-2.0) == pytest.approx(1 - c.probability(2.0))

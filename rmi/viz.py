@@ -527,25 +527,29 @@ def compare_findings(rows: list[dict], label_a: str, label_b: str) -> go.Figure:
     """Two models on one shared scale.
 
     Raw logits are not comparable across checkpoints: the two have different score scales and
-    different calibration. Percentile of each model's *own* rewording noise is comparable, because
-    each model's yardstick is measured on that model.
+    different calibration. A multiple of each model's *own* rewording bar is, because that bar is
+    measured on that model. This used to plot a percentile of the single-comparison noise floor
+    against a 95th-percentile line, which is the materiality rule the rest of the tool retired,
+    so the comparison tab decided a finding mattered by a test no other tab applied.
     """
-    rows = sorted(rows, key=lambda r: -(r["a"] or 0))
-    labels = [(r["title"][:58] + "...") if len(r["title"]) > 58 else r["title"] for r in rows]
+    rows = sorted(rows, key=lambda r: -max(r["a"] or 0, r["b"] or 0))
+    labels = [(r["title"][:58] + "\u2026") if len(r["title"]) > 58 else r["title"] for r in rows]
     fig = go.Figure()
+    fig.add_vrect(x0=0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
     for i, (key, name) in enumerate((("a", label_a), ("b", label_b))):
         fig.add_trace(go.Bar(
             y=labels, x=[r[key] for r in rows], orientation="h", name=name,
             marker=dict(color=SERIES[i]), width=0.34,
-            hovertemplate="%{y}<br>" + name + ": %{x:.0f}th pct of its own noise<extra></extra>"))
+            hovertemplate="%{y}<br>" + name +
+                          ": %{x:.1f}x what rewording alone could produce<extra></extra>"))
     fig.update_traces(marker_cornerradius=4)
     fig.update_layout(barmode="group", bargap=0.3, bargroupgap=0.08)
-    fig.add_vline(x=95, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=95, y=len(rows) - 0.4, text="95th pct", showarrow=False,
-                       xanchor="left", xshift=5, font=dict(size=11, color=INK2))
+    fig.add_vline(x=1, line=dict(color="#8a8a85", width=2, dash="dot"))
+    fig.add_annotation(x=1, y=len(rows) - 0.4, text="as far as rewording alone gets",
+                       showarrow=False, xanchor="left", xshift=5, font=dict(size=11, color=INK2))
     _base(fig, height=max(360, 44 * len(rows) + 90), showlegend=True,
-          xtitle="effect size as a percentile of that model's own rewording noise")
-    fig.update_xaxes(range=[0, 104])
+          xtitle="multiples of what rewording alone could produce")
+    fig.update_xaxes(range=[0, max([r[k] or 0 for r in rows for k in ("a", "b")] + [1.0]) * 1.12])
     return fig
 
 

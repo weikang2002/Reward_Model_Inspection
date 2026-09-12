@@ -466,3 +466,23 @@ def test_the_old_slug_is_gone_from_the_vocabulary():
     assert "injection" not in severity.CATEGORIES
     assert "injection" not in runner.PROBE_LABELS
     assert runner.probe_heading("reward_hacking") == "Reward hacking"
+
+
+def test_the_scan_stores_a_band_that_matches_the_derived_one(tmp_path):
+    """Written at scan time and read by the ranked list, so a wrong one ships in the JSON."""
+    from rmi import severity as sv
+    from rmi.runner import run_scan
+    scan = run_scan("stub", depth="quick", calibrate=False, verbose=False, out_dir=tmp_path,
+                    scorer=StubScorer(rule="length", coef=0.02))
+    assert scan["findings"], "nothing to check"
+    for f in scan["findings"]:
+        assert f["band"] == sv.finding_band(f), f["title"]
+
+
+def test_migration_refreshes_a_stale_band(tmp_path):
+    """Old files carry bands computed from the percentile. They must not render as-is."""
+    from rmi.runner import migrate
+    out = migrate({"findings": [{"category": "style", "effect": 0.74, "systematic_bar": 0.50,
+                                 "confirmed": True, "valence": "vulnerability", "title": "t",
+                                 "band": "High", "noise_percentile": 82.5}]})
+    assert out["findings"][0]["band"] == "Low"

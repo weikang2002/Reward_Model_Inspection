@@ -405,3 +405,68 @@ def test_the_method_text_needs_no_markup_to_render_in_either_place():
     for lead, body in methodology.SECTIONS + methodology.LIMITATIONS:
         for markup in ("**", "<b>", "<i>", "<p>"):
             assert markup not in body, (lead, markup)
+
+
+def test_the_comparison_chart_marks_the_bar_the_rest_of_the_tool_uses():
+    """It plotted a percentile against a 95th-percentile line, a rule no other tab applies."""
+    rows = [{"title": "t", "a": 2.0, "b": 0.5, "valence": "vulnerability"}]
+    fig = viz.compare_findings(rows, "A", "B")
+    lines = [s for s in fig.layout.shapes if s.type == "line"]
+    assert [s.x0 for s in lines] == [1], "the threshold is one times the bar"
+    assert "rewording alone" in fig.layout.xaxis.title.text
+    assert "percentile" not in fig.layout.xaxis.title.text
+
+
+def test_the_comparison_chart_ranks_by_the_larger_of_the_two_models():
+    """Sorting on model A alone buries a finding that only fires on model B."""
+    rows = [{"title": "only B", "a": 0.1, "b": 9.0, "valence": "vulnerability"},
+            {"title": "only A", "a": 3.0, "b": 0.1, "valence": "vulnerability"}]
+    fig = viz.compare_findings(rows, "A", "B")
+    assert list(fig.data[0].y)[0] == "only B"
+
+
+def test_a_model_at_chance_leads_the_verdict_with_that():
+    """Every bias number below describes something already not doing its job."""
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding_row(3.0)]}
+    cal = {"fitted": True, "accuracy": 0.506, "accuracy_ci": [0.462, 0.55]}
+    html = overview_verdict(R, cal)
+    assert "does not beat chance" in html
+    assert "50.6%" in html and "46.2%" in html
+
+
+def test_a_model_above_chance_does_not_get_the_chance_verdict():
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding_row(3.0)]}
+    cal = {"fitted": True, "accuracy": 0.63, "accuracy_ci": [0.59, 0.67]}
+    assert "does not beat chance" not in overview_verdict(R, cal)
+
+
+def finding_row(ratio, **kw):
+    f = {"category": "style", "title": "Something happens", "effect": ratio, "confirmed": True,
+         "systematic_bar": 1.0, "valence": "vulnerability", "n_items": 30}
+    f.update(kw)
+    return f
+
+
+def test_a_model_with_only_small_effects_says_so_rather_than_alarming():
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding_row(0.5), finding_row(0.7)]}
+    html = overview_verdict(R, None)
+    assert "Nothing found here is large enough to matter" in html
+    assert "verdict mild" in html
+
+
+def test_a_model_with_nothing_confirmed_says_nothing_was_confirmed():
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding_row(9.0, confirmed=False)]}
+    html = overview_verdict(R, None)
+    assert "No confirmed vulnerabilities" in html
+    assert "verdict clear" in html
+
+
+def test_the_verdict_ignores_findings_that_show_the_model_behaving_well():
+    """A healthy finding at 11x would otherwise headline a vulnerability report."""
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding_row(11.0, valence="healthy")]}
+    assert "No confirmed vulnerabilities" in overview_verdict(R, None)

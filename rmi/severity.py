@@ -62,6 +62,18 @@ def systematic_ratio(finding: dict) -> float | None:
     return abs(eff) / bar
 
 
+def finding_band(finding: dict) -> str:
+    """One finding's band, derived the same way a category's is.
+
+    Both renderers call this rather than reading ``finding["band"]``. The stored value is written
+    at scan time and was for a long time computed from the finding's *noise percentile*, a 0-100
+    number, thresholded against bands that run 0/1/2/4 as multiples of the systematic bar. Almost
+    everything therefore stored "High", and a finding could show a red pill in the ranked list
+    beside an amber tile for its own category.
+    """
+    return band(systematic_ratio(finding), confirmed=bool(finding.get("confirmed")))
+
+
 def is_material(finding: dict) -> bool:
     """Confirmed, and at least as large as rewording alone could produce at this sample size.
 

@@ -247,3 +247,37 @@ def test_the_overview_states_the_threshold_it_actually_applies():
 def test_categories_are_listed_not_chained_with_and(names, expected):
     from rmi.findings import _listed
     assert _listed(names) == expected
+
+
+# ---------------------------------------------------------------------------------------
+# a finding's own band
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_findings_band_comes_from_its_ratio_not_its_noise_percentile():
+    """These are different scales and the bands are calibrated for one of them.
+
+    `rank_findings` passed noise_percentile, a 0-100 number, through thresholds that run
+    0/1/2/4 as multiples of the systematic bar. Almost every finding therefore stored "High",
+    and a 1.5x effect showed a red pill in the ranked list beside its own category's amber tile.
+    """
+    f = finding(0.74, bar=0.50, confirmed=True)   # ratio 1.48 -> Low
+    f["noise_percentile"] = 82.5
+    assert sv.finding_band(f) == "Low"
+    assert sv.band(f["noise_percentile"], confirmed=True) == "High", "the two disagree sharply"
+
+
+def test_a_findings_band_matches_the_band_its_category_would_get():
+    """The pill beside a finding and the tile above it must not contradict each other."""
+    for ratio in (0.4, 1.2, 2.5, 9.0):
+        f = finding(ratio, bar=1.0, confirmed=True, valence="vulnerability")
+        assert sv.finding_band(f) == sv.summarise([f], f["category"])["band"], ratio
+
+
+def test_an_unconfirmed_finding_is_unconfirmed_however_large():
+    assert sv.finding_band(finding(9.0, bar=1.0, confirmed=False)) == "Unconfirmed"
+
+
+def test_a_finding_with_no_bar_is_unknown_rather_than_negligible():
+    """Failing open here would call an unmeasurable effect harmless."""
+    assert sv.finding_band(finding(9.0, bar=None, confirmed=True)) == "Unknown"

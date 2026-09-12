@@ -55,6 +55,23 @@ PROMPT_FORMAT = DEFAULT_PROMPT_FORMAT
 DEFAULT_MAX_LENGTH = 512
 
 
+def sep_baseline(tokenizer) -> int:
+    """How many separator tokens the tokenizer adds to a pair by itself.
+
+    Anything beyond this in a scored row was injected by the text, which is the ground truth for
+    the ``[SEP]``-forgery attack. It was hardcoded to 2, which is right for DeBERTa and wrong for
+    a tokenizer that adds a different number (RoBERTa adds three) or none at all (GPT-2).
+
+    Measured on a dummy pair of real words, never on an empty one: DeBERTa collapses an empty
+    second segment and emits a single separator, so an empty probe reads one too few and every
+    clean answer would then look as though it carried a forged separator.
+    """
+    sep_id = getattr(tokenizer, "sep_token_id", None)
+    if sep_id is None:
+        return 0
+    return sum(1 for t in tokenizer("a", "b")["input_ids"] if t == sep_id)
+
+
 def prompt_format_for(model_id: str) -> str:
     """Which input formulation a model was trained on. Unknown models get the bare pairing."""
     return MODEL_PROMPT_FORMAT.get(model_id, DEFAULT_PROMPT_FORMAT)
@@ -345,6 +362,7 @@ class RewardModel:
         # which for every sequence shorter than the longest in its batch is padding.
         if getattr(self.model.config, "pad_token_id", None) is None:
             self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        self._sep_baseline = sep_baseline(self.tokenizer)
         self.device = pick_device(device)
         self.model.to(self.device)
 
@@ -423,15 +441,17 @@ class RewardModel:
                 n_answer = sum(1 for s in seq_ids if s == 1)
             else:  # slow tokenizer fallback
                 n_answer = len(self.tokenizer(pairs[i][1], add_special_tokens=False)["input_ids"])
-            # The pair encoding always ends with one [SEP] and has one at the boundary. Anything
-            # beyond two was injected by the answer text.
+            # Anything beyond the separators the tokenizer adds by itself was injected by the
+            # text. That baseline is measured, not assumed: DeBERTa adds two, RoBERTa three, and
+            # GPT-2 has no separator token at all.
             out.append(
                 {
                     "n_tokens": len(ids),
                     "n_answer_tokens": n_answer,
                     "truncated": len(ids) > self.max_length,
                     "n_unk": sum(1 for t in ids if t == unk_id),
-                    "n_sep_in_answer": max(0, sum(1 for t in ids if t == sep_id) - 2),
+                    "n_sep_in_answer": max(
+                        0, sum(1 for t in ids if t == sep_id) - self._sep_baseline),
                 }
             )
         return out
@@ -450,9 +470,14 @@ class RewardModel:
         cached = self.cache.get_many(keys)
         self._n_cache_hits += sum(1 for k in keys if k in cached)
 
+        # Provenance is re-derived for every row, hit or miss, and only the score is taken from
+        # the cache. The score is a function of the text and cannot go stale; the provenance is a
+        # function of this code, and a change to what _measure records was served stale from rows
+        # written before it. Re-measuring is a tokenizer pass, cheap beside the model.
+        meta_all = self._measure(pairs)
         todo = [i for i, k in enumerate(keys) if k not in cached]
         if todo:
-            meta = self._measure([pairs[i] for i in todo])
+            meta = [meta_all[i] for i in todo]
             # Length-sorted batching: adjacent items pad to similar lengths, which is worth an
             # order of magnitude on MPS.
             order = sorted(range(len(todo)), key=lambda j: meta[j]["n_tokens"])
@@ -485,7 +510,7 @@ class RewardModel:
             cached.update(fresh)
             self._n_scored += len(todo)
 
-        return [cached[k] for k in keys]
+        return [Scored(score=cached[k].score, **m) for k, m in zip(keys, meta_all)]
 
     def score(self, pairs: Sequence[Pair]) -> list[float]:
         return [s.score for s in self.score_detailed(pairs)]

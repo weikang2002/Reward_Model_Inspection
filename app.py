@@ -23,8 +23,8 @@ from rmi import viz
 from rmi.findings import (module_items, overview_verdict, self_check, tone_check,
                           verdict_line)
 from rmi.report import build as build_report
-from rmi.scoring import (ModelTooLargeError, RewardModel, check_download_size,
-                         download_size)
+from rmi.scoring import (MAX_DOWNLOAD_BYTES, ModelTooLargeError, RewardModel,
+                         check_download_size, download_size)
 from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
 
@@ -170,6 +170,13 @@ with st.sidebar:
                                 f"{size_label(m)}{m.split('/')[-1]}")
     model_id = (st.text_input("HuggingFace model id", value="")
                 if model_choice == OTHER else model_choice)
+    # Stated up front rather than only in the refusal, so the sizes beside each model read as a
+    # budget rather than as trivia, and a custom id can be judged before it is typed.
+    st.caption(
+        f"Any HuggingFace reward model with a single output head, **up to "
+        f"{MAX_DOWNLOAD_BYTES / 1024**3:g} GB**. Larger ones are refused, since this runs on a "
+        "laptop."
+    )
 
     # Checked here as well as in RewardModel, so an oversize model is refused before the user
     # commits to a scan rather than as an exception a minute later.
@@ -182,7 +189,8 @@ with st.sidebar:
             st.error(too_large, icon=":material/block:")
         else:
             if pending:
-                st.info(f"First run will download {pending / 1024**3:.1f} GB.",
+                st.info(f"First run will download {pending / 1024**3:.1f} GB of "
+                        f"{MAX_DOWNLOAD_BYTES / 1024**3:g} GB allowed.",
                         icon=":material/download:")
 
     st.markdown("**Probe for**")
@@ -582,7 +590,7 @@ with tabs[0]:
                 bits.append(f"p = {f['p_raw']:.3g}")
             st.markdown(
                 f'<div class="finding" style="border-left-color:{color}">'
-                f'{band_pill(f["band"])} &nbsp;<b>{html.escape(f["title"])}</b>'
+                f'{band_pill(sev.finding_band(f))} &nbsp;<b>{html.escape(f["title"])}</b>'
                 f'<div class="sub" style="color:#52514e; font-size:12.5px; margin-top:5px">'
                 f'{" · ".join(bits)}</div></div>', unsafe_allow_html=True)
 
@@ -1051,13 +1059,20 @@ with tabs[4]:
 
         kc = ij.get("key_contrasts", [])
         if kc:
+            # Each contrast is already a finding, so take its band rather than re-deciding here.
+            # This once coloured itself from `exceeds_noise_floor`, which compares a mean over
+            # many items against the spread of a *single* rewording: the materiality rule the
+            # rest of the tool retired, and one that calls almost everything material.
+            kc_band = {f["title"].split(":")[0]: sev.finding_band(f) for f in R["findings"]
+                       if (f.get("detail") or {}).get("kind") == "key_contrast"}
             with st.expander("Is it really the attack, or just the text it carries?"):
                 for c in kc:
-                    exceeds = c.get("exceeds_noise_floor")
+                    band = kc_band.get(f"{c['attack']} versus its control {c['control']}")
                     st.markdown(
                         f'<div class="finding" style="border-left-color:'
-                        f'{viz.STATUS["critical"] if exceeds else viz.STATUS["warning"]}">'
-                        f'<b>{html.escape(c["attack"])} versus {html.escape(c["control"])}: '
+                        f'{viz.BAND_COLOR.get(band, "#8a8a85")}">'
+                        + (band_pill(band) + " &nbsp;" if band else "")
+                        + f'<b>{html.escape(c["attack"])} versus {html.escape(c["control"])}: '
                         f'{c["mean_delta"]:+.2f} logits</b>'
                         f'<div class="sub">{html.escape(c["question"])}<br>'
                         f'Consistent on {c["win_rate"]:.0%} of items, p = {c["p_sign"]:.1e}, '
@@ -1112,28 +1127,28 @@ with tabs[5]:
                     unsafe_allow_html=True)
         st.caption(
             "Raw scores are not comparable between checkpoints: the two have different scales and "
-            "different calibration. Everything here is a percentile of each model's *own* "
-            "rewording noise, or a probability. Both are measured per model and so mean the same "
-            "thing on either side."
+            "different calibration. Everything here is a multiple of each model's *own* rewording "
+            "bar, or a probability. Both are measured per model and so mean the same thing on "
+            "either side."
         )
 
         # ---- where they differ ----------------------------------------------------------------
         amap = {finding_key(f): f for f in R["findings"]}
         bmap = {finding_key(f): f for f in O["findings"]}
         shared = [k for k in amap if k in bmap
-                  and amap[k].get("noise_percentile") is not None
-                  and bmap[k].get("noise_percentile") is not None]
+                  and sev.systematic_ratio(amap[k]) is not None
+                  and sev.systematic_ratio(bmap[k]) is not None]
         if shared:
             rows = [{"title": amap[k]["title"].split(":")[0][:70],
-                     "a": amap[k]["noise_percentile"], "b": bmap[k]["noise_percentile"],
+                     "a": sev.systematic_ratio(amap[k]), "b": sev.systematic_ratio(bmap[k]),
                      "valence": amap[k]["valence"]} for k in shared]
             rows = sorted(rows, key=lambda r: -abs(r["a"] - r["b"]))[:14]
             st.markdown("#### Where they differ most")
             st.plotly_chart(viz.compare_findings(rows, A_name, B_name), width="stretch",
                             config={"displayModeBar": False})
             st.caption(
-                "Sorted by how far apart the two models are. A bar past the dotted line means the "
-                "effect is larger than 95% of that model's own meaning-preserving rewordings."
+                "Sorted by how far apart the two models are. A bar past the dotted line is an "
+                "effect bigger than that model's own rewording could produce at this sample size."
             )
 
         # ---- severity, grouped the same way as everywhere else --------------------------------

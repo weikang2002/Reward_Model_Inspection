@@ -197,7 +197,8 @@ def build(results: dict, out_path: Path | str) -> Path:
             A(f"<div class='finding' style='border-left-color:"
               f"{viz.VALENCE_COLOR.get(f['valence'], '#8a8a85')}'>"
               f"<span class='band' style='background:"
-              f"{viz.BAND_COLOR.get(f['band'], '#8a8a85')}'>{html.escape(f['band'])}</span> "
+              f"{viz.BAND_COLOR.get(sev.finding_band(f), '#8a8a85')}'>"
+              f"{html.escape(sev.finding_band(f))}</span> "
               f"<b>{html.escape(f['title'])}</b>"
               f"<div class='meta'>{' · '.join(bits)}</div></div>")
 

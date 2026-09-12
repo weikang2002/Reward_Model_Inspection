@@ -249,3 +249,14 @@ def test_the_dashboard_offers_exactly_the_presets_that_are_known_to_fit():
     )
     assert set(presets) == set(SHIPPED), "a preset was added without measuring its size here"
 
+
+
+def test_the_dashboard_states_the_limit_without_hardcoding_it():
+    """The sidebar names the limit in three places: the picker caption, the pending-download
+    notice and the refusal. All three must follow the constant, or raising it again leaves the
+    UI advertising a number the code no longer enforces."""
+    import pathlib
+    src = pathlib.Path("app.py").read_text()
+    assert src.count("MAX_DOWNLOAD_BYTES") >= 2, "the sidebar must state the limit"
+    for literal in ("1 GB", "2 GB", "3 GB", "4 GB", "5 GB"):
+        assert literal not in src, f"{literal!r} is hardcoded and will drift from the constant"

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 177 tests, ~25s
+uv run pytest -q                           # 211 tests, ~28s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -86,7 +86,11 @@ other.**
 ## Things that will bite you
 
 **Severity is derived on load, not read from the results file.** `sev.summarise_all(R["findings"])`
-is called in `app.py`, `rmi/report.py` *and* `runner.py`. Changing a threshold therefore takes
+is called in `app.py`, `rmi/report.py` *and* `runner.py`, and `sev.finding_band(f)` is how a single
+finding's pill is coloured, never `f["band"]`. The stored band was for a long time computed from
+the finding's *noise percentile*, a 0-100 number, put through thresholds that run 0/1/2/4 as
+multiples of the systematic bar: almost everything stored "High", and a 1.5x effect showed a red
+pill beside its own category's amber tile. Changing a threshold therefore takes
 effect on old result files with no rescan. But **finding titles are baked in at scan time**, so
 editing a title string in `rank_findings` does require re-running scans.
 
@@ -99,6 +103,13 @@ rule on each finding disagreed with this one whenever the floor was degenerate.
 and with a handful of probes a 90th percentile lands on the second largest and hides the finding
 the reader needs. A banner and its category pill must take their colour from the same `band()`
 call, or the same effect shows as a red alarm beside an amber chip.
+
+**The separator baseline is measured, not assumed.** `scoring.sep_baseline` counts the separators
+a tokenizer adds to a dummy pair of real words, because `n_sep_in_answer` is the ground truth for
+the `[SEP]`-forgery attack. It was hardcoded to 2, which is right for DeBERTa, wrong for RoBERTa
+(three) and wrong for GPT-2 (none). Do not probe with an empty pair: DeBERTa collapses an empty
+second segment and emits a single separator, so the baseline reads one too few and every clean
+answer then looks as though it carried a forged one.
 
 **Prompt format is per model, and getting it wrong never raises.** `PROMPT_FORMATS` and
 `MODEL_PROMPT_FORMAT` in `rmi/scoring.py` map a model id to the formulation it was trained on; the
@@ -208,7 +219,10 @@ Confirmed by probing, not assumed. Several overturned an obvious design:
 - Emoji tokenize to real pieces, not `[UNK]`.
 - `max_position_embeddings` is 512 but the tokenizer's `model_max_length` is unset, so nothing
   truncates unless asked. Truncation is a confound for any suffix or verbosity result.
-- Scoring is bit-identical across runs, which is why the score cache is never stale. Results JSON
+- Scoring is bit-identical across runs, which is why the cached *score* is never stale. The
+  provenance stored beside it is a function of this code, not of the text, so `score_detailed`
+  re-derives every row's provenance on a hit and takes only the score from the cache. A tokenizer
+  pass over 3,000 cached rows costs 0.11s against 18.8s to score them. Results JSON
   *does* go stale when analysis code changes; that asymmetry is why the sidebar's clear-results
   control deliberately leaves `.rmi_cache/` alone.
 
