@@ -217,12 +217,18 @@ def build(results: dict, out_path: Path | str) -> Path:
             A(f"<h3>{label}</h3><div class='grid g3' style='grid-template-columns:2fr 1fr'>"
               f"<div>{_fig(viz.identity_groups(blk))}</div>"
               f"<div>{_fig(viz.identity_permutation(blk))}</div></div>")
+            # None when swapping names inside a group moves nothing at all, so there is no
+            # within-group spread to take a ratio against. Formatting it blind crashed the build.
+            ratio = blk.get("between_vs_within_ratio")
+            compare = (f" Swapping across groups moves the score {ratio:.2f} times as much as "
+                       "swapping to another name inside the same group."
+                       if ratio is not None else
+                       " Swapping to another name inside the same group moves the score not at "
+                       "all, so there is no within-group spread to compare against.")
             A(f"<p>The largest gap between identity groups is <code>{o['statistic']:.3f}</code> "
               f"logits. Reshuffling which names belong to which group {o['n_perm']:,} times, and "
               "only within blocks of equal name token length, produces a gap that large "
-              f"<b>p = {o['p_value']:.4f}</b> of the time. Swapping across groups moves the score "
-              f"{blk['between_vs_within_ratio']:.2f} times as much as swapping to another name "
-              "inside the same group.</p>")
+              f"<b>p = {o['p_value']:.4f}</b> of the time.{compare}</p>")
             A(_table(blk["pairwise_gaps"],
                      ["group_a", "group_b", "gap", "ci_low", "ci_high", "p_wild", "q_value",
                       "noise_percentile"]))

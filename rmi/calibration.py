@@ -33,16 +33,22 @@ def parse_hh_example(text: str) -> tuple[str, str] | None:
     idx = text.rfind("\n\nAssistant:")
     if idx < 0:
         return None
-    prompt = text[:idx].strip()
+    prompt = text[:idx]
     response = text[idx + len("\n\nAssistant:") :].strip()
-    if not prompt or not response:
-        return None
     # Keep the prompt to its last human turn: these RMs were trained on question/answer pairs,
     # and a long multi-turn history mostly consumes the 512-token budget.
+    #
+    # Locate the marker *before* stripping. Stripping first removes the leading blank line on a
+    # single-turn transcript, so "\n\nHuman:" no longer matches and the label survives into the
+    # prompt. That left a stray "Human:" on 29% of pairs, which the reward model then scored.
     h = prompt.rfind("\n\nHuman:")
     if h >= 0:
-        prompt = prompt[h + len("\n\nHuman:") :].strip()
-    prompt = re.sub(r"\s+", " ", prompt)
+        prompt = prompt[h + len("\n\nHuman:") :]
+    prompt = re.sub(r"\s+", " ", prompt).strip()
+    if prompt.startswith("Human:"):  # a transcript opening with the label and no blank line
+        prompt = prompt[len("Human:") :].strip()
+    if not prompt or not response:
+        return None
     return prompt, response
 
 
