@@ -20,7 +20,7 @@ from .probes import injection as inj
 from .probes import noise_floor as nfm
 from .probes import style as stm
 from .probes import sycophancy as sym
-from .scoring import RewardModel
+from .scoring import RewardModel, Scorer
 from .stats.inference import adjust_family, bh_fdr
 
 # Anchored to the repo root rather than the working directory, so the dashboard finds past runs
@@ -105,10 +105,13 @@ def run_scan(
     out_dir: Path | str | None = None,
     verbose: bool = True,
     progress_cb=None,
+    scorer: Scorer | None = None,
 ) -> dict:
     cfg = PRESETS[depth]
     t0 = time.time()
-    rm = RewardModel(model_id, device=device, batch_size=batch_size)
+    # An injected scorer lets the whole orchestrator be exercised against a planted rule without
+    # loading a model, which is how the end-to-end tests check what a scan writes onto a finding.
+    rm = scorer or RewardModel(model_id, device=device, batch_size=batch_size)
     steps = list(ALWAYS)
     if calibrate:
         steps += list(OPTIONAL)

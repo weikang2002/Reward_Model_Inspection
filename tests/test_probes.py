@@ -7,6 +7,9 @@ is "longer is better", the style module must report the length slope and call ev
 zero. If that ever fails, the style module is measuring length and calling it style.
 """
 
+import json
+import math
+
 import numpy as np
 import pytest
 
@@ -194,3 +197,111 @@ def test_contamination_is_zero_for_an_indifferent_scorer(small_corpus):
     res = inj.contamination(StubScorer(rule="constant"), small_corpus, n_boot=200, seed=0)
     for where, d in res.items():
         assert d["mean_delta"] == 0.0, where
+
+
+# ---------------------------------------------------------------------------------------
+# the noise floor's construction
+# ---------------------------------------------------------------------------------------
+
+
+def test_pairwise_floor_is_symmetric_but_rewrite_penalty_need_not_be(corpus):
+    """The floor must not carry the cost of being a rewrite.
+
+    Paraphrases score systematically lower than the text they came from, and folding that constant
+    into the bar inflates it while adding nothing that shrinks with sample size. Measuring rewrite
+    against rewrite removes it: every pair is drawn from the same pool, so the signed mean is zero
+    by construction no matter how large the penalty is.
+    """
+    # A scorer that docks a fixed amount from anything that is not the original answer.
+    class Penalising(StubScorer):
+        def __init__(self, corpus):
+            super().__init__(rule="constant")
+            self._originals = {q["neutral_answer"] for q in corpus["questions"]}
+
+        def score_detailed(self, pairs):
+            out = []
+            for (q, a), s in zip(pairs, super().score_detailed(pairs)):
+                penalty = 0.0 if a in self._originals else -3.0
+                out.append(type(s)(score=s.score + penalty, n_tokens=s.n_tokens,
+                                   n_answer_tokens=s.n_answer_tokens, truncated=s.truncated,
+                                   n_unk=s.n_unk, n_sep_in_answer=s.n_sep_in_answer))
+            return out
+
+    nf = nfm.run(Penalising(corpus), corpus)
+    assert nf.rewrite_penalty == pytest.approx(-3.0), "the penalty must be reported, not hidden"
+    assert np.mean(nf.pairwise_deltas) == pytest.approx(0.0, abs=1e-9)
+    assert nf.pairwise_sd == pytest.approx(0.0, abs=1e-9), (
+        "a constant penalty is not wording variability and must not widen the bar"
+    )
+    assert nf.systematic_bar(30) == float("inf")
+
+
+def test_pairwise_floor_tracks_real_wording_variability(corpus):
+    """When rewrites genuinely differ from each other, the bar must pick that up."""
+    nf = nfm.run(StubScorer(rule="length", coef=0.05), corpus)
+    assert nf.pairwise_sd > 0
+    assert nf.systematic_bar(4) > nf.systematic_bar(40)
+
+
+def test_constant_scorer_has_no_bar_to_clear(corpus):
+    nf = nfm.run(StubScorer(rule="constant"), corpus)
+    assert nf.pairwise_sd == 0.0
+    assert nf.systematic_bar(10) == float("inf")
+
+
+# ---------------------------------------------------------------------------------------
+# what a scan writes onto each finding
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def stub_scan(tmp_path_factory):
+    from rmi.runner import run_scan
+    return run_scan("stub", depth="quick", calibrate=False, verbose=False,
+                    out_dir=tmp_path_factory.mktemp("results"),
+                    scorer=StubScorer(rule="length", coef=0.02))
+
+
+def test_findings_do_not_carry_the_retired_materiality_flag(stub_scan):
+    """`exceeds_systematic` was a second answer to the same question and disagreed with the first."""
+    assert not any("exceeds_systematic" in f for f in stub_scan["findings"])
+
+
+def test_findings_carry_a_finite_bar_or_none(stub_scan):
+    """An infinite bar means 'no instrument', which must be recorded as None, not inf."""
+    for f in stub_scan["findings"]:
+        bar = f.get("systematic_bar")
+        assert bar is None or (bar > 0 and math.isfinite(bar)), f
+
+
+def test_stored_severity_matches_severity_recomputed_from_findings(stub_scan):
+    """The dashboard derives severity on load rather than reading it back.
+
+    If the stored copy and the derived one can differ, a run scanned under older thresholds
+    renders bands that contradict the findings listed beside them.
+    """
+    from rmi import severity as sv
+    assert stub_scan["severity"] == sv.summarise_all(stub_scan["findings"])
+
+
+def test_a_scan_is_reproducible_at_a_fixed_seed(tmp_path):
+    from rmi.runner import run_scan
+    runs = [run_scan("stub", depth="quick", calibrate=False, verbose=False,
+                     out_dir=tmp_path / f"r{i}", scorer=StubScorer(rule="length", coef=0.02))
+            for i in range(2)]
+    a, b = ({k: v for k, v in r.items() if k != "meta"} for r in runs)
+    assert json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
+
+
+def test_a_pure_length_rule_produces_no_material_style_bias(stub_scan):
+    """The headline guarantee, carried all the way through the orchestrator.
+
+    `test_pure_length_scorer_reports_no_style_bias` checks the regression in isolation; this checks
+    that nothing downstream reintroduces the effect as a reportable finding.
+    """
+    style = [f for f in stub_scan["findings"]
+             if f["category"] == "style" and f["detail"].get("kind") == "length_adjusted"]
+    assert style, "the style module should have reported something"
+    assert all(abs(f["effect"]) < 0.05 for f in style), \
+        [(f["detail"]["transform"], f["effect"]) for f in style]
+    assert stub_scan["severity"]["style"]["n_material"] == 0

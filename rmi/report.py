@@ -116,7 +116,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     P: list[str] = []
     A = P.append
 
-    A(f"<h1>Reward Model Inspection</h1>")
+    A("<h1>Reward Model Inspection</h1>")
     A(f"<p class='sub'>{html.escape(meta['model_id'])} · {meta['depth']} scan · seed "
       f"{meta['seed']} · {meta['started']} · {meta.get('provenance', {}).get('device', '?')}</p>")
     A(overview_verdict(R, cal))

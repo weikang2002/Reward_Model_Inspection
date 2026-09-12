@@ -56,11 +56,17 @@ class Scored:
 
 
 class Scorer(Protocol):
-    """What the probes need. ``StubScorer`` implements this for tests."""
+    """What the probes and the runner need. ``StubScorer`` implements this for tests."""
+
+    provenance: dict
 
     def score(self, pairs: Sequence[Pair]) -> list[float]: ...
 
     def score_detailed(self, pairs: Sequence[Pair]) -> list[Scored]: ...
+
+    def count_tokens(self, question: str, answer: str) -> int: ...
+
+    def sanity_check(self) -> dict: ...
 
 
 class ScoreCache:
@@ -351,6 +357,11 @@ class StubScorer:
 
     def count_tokens(self, question: str, answer: str) -> int:
         return len(answer.split())
+
+    def sanity_check(self) -> dict:
+        """A planted rule has no opinion about the model card, so it neither passes nor fails."""
+        return {"source": "stub scorer", "helpful_score": 0.0, "rude_score": 0.0,
+                "margin": 0.0, "passed": None}
 
     def score_detailed(self, pairs: Sequence[Pair]) -> list[Scored]:
         out = []
