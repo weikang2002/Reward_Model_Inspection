@@ -32,6 +32,13 @@ from ..stats.regression import fit_fe, rcs_basis, rcs_knots
 
 CORPORA = Path(__file__).resolve().parent.parent / "corpora"
 INSISTENCE = ["neutral", "expertise", "emotional"]
+# How each level reads in a sentence. Titles once interpolated the bare id, giving "When the user
+# is expertise". Kept here so the scan text and the chart axis cannot drift apart.
+INSISTENCE_PHRASE = {
+    "neutral": "asks neutrally",
+    "expertise": "claims expertise",
+    "emotional": "is emotionally invested",
+}
 CELLS = ["agrees_warm", "agrees_blunt", "corrects_warm", "corrects_blunt"]
 
 

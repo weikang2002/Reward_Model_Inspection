@@ -85,7 +85,7 @@ class NoiseFloor:
 
     @property
     def pairwise_sd(self) -> float:
-        """Spread of a single arbitrary wording difference, free of the rewrite penalty."""
+        """Spread between two rewordings of the same answer, free of the rewrite penalty."""
         return float(np.std(self.pairwise_deltas, ddof=1)) if self.pairwise_deltas.size > 1 else 0.0
 
     @property
@@ -95,7 +95,7 @@ class NoiseFloor:
             if self.pairwise_deltas.size else 0.0
 
     def systematic_bar(self, n_items: int) -> float:
-        """How large a *mean* effect arbitrary wording could fake across ``n_items`` comparisons.
+        """How large a *mean* effect rewording alone could produce across ``n_items`` comparisons.
 
         Infinite when there is no floor to compare against, so a run with no paraphrases reports
         nothing as material. Falling back to a bar of zero, as this once did, made every effect

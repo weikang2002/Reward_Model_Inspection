@@ -88,21 +88,24 @@ def verdict_line(items: list[dict], category: str, phrase: str, *, extra: str = 
     if material:
         worst = max(material, key=lambda i: i.get("ratio") or 0)
         cls = _BAND_CLASS.get(band(worst.get("ratio"), confirmed=True), "")
-        return (f'<div class="verdict{cls}"><b>{len(material)} of {len(items)}</b> probes show that '
-                f'{phrase} systematically. The largest is <b>{_esc(worst["label"])}</b>, '
+        return (f'<div class="verdict{cls}"><b>{len(material)} of {len(items)}</b> probes '
+                f'{"shows" if len(material) == 1 else "show"} that {phrase} systematically. The largest is <b>{_esc(worst["label"])}</b>, '
                 f'{abs(worst["effect"]):.2f} logits, which is {worst["ratio"]:.1f} times what '
-                f'arbitrary wording could fake across the same {worst["n_items"]} comparisons.'
+                f'rewording alone could produce across the same {worst["n_items"]} '
+                'comparisons.'
                 f'{hint}</div>')
     if confirmed:
         top = max(confirmed, key=lambda i: i.get("ratio") or 0)
         bar = top.get("systematic_bar")
-        tail = (f' It is {abs(top["effect"]):.2f} logits against a bar of {bar:.2f}'
+        tail = (f' It is {abs(top["effect"]):.2f} logits, against {bar:.2f} for rewording'
+                f' alone'
                 if bar else f' It is {abs(top["effect"]):.2f} logits')
-        return (f'<div class="verdict mild">Nothing here is bigger than arbitrary wording could '
-                f'fake at this sample size. <b>{len(confirmed)} of {len(items)}</b> are still '
+        return (f'<div class="verdict mild">Nothing here is bigger than rewording alone could '
+                f'produce at this sample size. <b>{len(confirmed)} of {len(items)}</b> are still '
                 f'statistically real, the largest being <b>{_esc(top["label"])}</b>.{tail}.'
-                '<span class="hint">More items would lower the bar: it falls as one over the '
-                'square root of the number of comparisons averaged.</span></div>')
+                '<span class="hint">More items would lower what rewording alone can produce: it '
+                'falls as one over the square root of the number of comparisons averaged.'
+                '</span></div>')
     if adverse:
         return (f'<div class="verdict clear">No statistically confirmed evidence that {phrase}. '
                 f'{len(items) - len(adverse)} of {len(items)} probes run the other way.'
@@ -148,6 +151,13 @@ def self_check(results: dict) -> dict | None:
     }
 
 
+def _listed(names: list[str]) -> str:
+    """"a", "a and b", "a, b and c". Joining three with " and " reads as a mistake."""
+    if len(names) < 3:
+        return " and ".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 def overview_verdict(results: dict, cal: dict | None) -> str:
     """One sentence for the whole model, before any of the evidence.
 
@@ -169,31 +179,35 @@ def overview_verdict(results: dict, cal: dict | None) -> str:
                 f'preferences.</b> It agrees with real human judgments {cal["accuracy"]:.1%} of '
                 f'the time and its interval reaches down to {cal["accuracy_ci"][0]:.1%}, so it is '
                 'not tracking human judgment at all. That is a more serious problem than any bias '
-                f'below.{_esc("")}{extra}</div>')
+                f'below.{extra}</div>')
 
     if material:
         worst = max(material, key=lambda f: systematic_ratio(f) or 0)
         cls = _BAND_CLASS.get(band(systematic_ratio(worst), confirmed=True), "")
         others = sorted({f["category"] for f in material} - {worst["category"]})
         n_cat = len({f["category"] for f in material})
-        tail = (f" {len(material)} probes across "
-                f"{n_cat} categor{'y' if n_cat == 1 else 'ies'} clear that bar"
-                if len(material) > 1 else " It is the only finding that clears that bar")
-        also = f", alongside {' and '.join(others)}" if others else ""
+        # "larger than 95% of single rewordings" described the percentile bar this replaced, and
+        # is not what is_material tests. Say what the threshold actually is.
+        tail = (f"{len(material)} probes across "
+                f"{n_cat} categor{'y' if n_cat == 1 else 'ies'} are bigger than rewording alone "
+                "could produce at their own sample size."
+                if len(material) > 1 else
+                "It is the only finding bigger than rewording alone could produce at its own "
+                "sample size.")
+        also = f", alongside {_listed(others)}" if others else ""
         return (f'<div class="verdict{cls}"><b>The clearest exposure is '
                 f'{_esc(worst["category"])}{_esc(also)}.</b> '
-                f'{_esc(worst["title"])}<span class="hint">{_esc(tail)}: an effect larger than 95% '
-                'of what you get from simply rewording an answer.</span></div>')
+                f'{_esc(worst["title"])}<span class="hint">{_esc(tail)}</span></div>')
 
     if confirmed:
         top = max(confirmed, key=lambda f: systematic_ratio(f) or 0)
         return ('<div class="verdict mild"><b>Nothing found here is large enough to matter.</b> '
                 f'Every one of the {len(confirmed)} confirmed effects is smaller than '
-                'what arbitrary wording could fake across the same number of comparisons. The '
+                'what rewording alone could produce across the same number of comparisons. The '
                 f'largest is {_esc(top["title"])}'
                 '<span class="hint">An effect can be statistically solid and still be too small '
-                'to steer a policy. More items lower that bar, as one over the square root of '
-                'the number of comparisons.</span></div>')
+                'to steer a policy. More items lower what rewording alone can produce, as one '
+                'over the square root of the number of comparisons.</span></div>')
 
     return ('<div class="verdict clear"><b>No confirmed vulnerabilities.</b> No probe in any '
             'category found a statistically confirmed effect in the direction that would count '

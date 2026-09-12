@@ -10,8 +10,12 @@ Status colours always ship alongside their band name as text, so identity is nev
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import plotly.graph_objects as go
+
+from .probes.sycophancy import INSISTENCE_PHRASE
 
 # Categorical slots, in the fixed validated order. Never cycled.
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -57,12 +61,105 @@ def _base(fig: go.Figure, *, height=380, xtitle=None, ytitle=None, showlegend=Fa
 
 
 # --------------------------------------------------------------------------------------
+# chart labels
+# --------------------------------------------------------------------------------------
+
+CATEGORY_LABEL = {"identity": "Identity", "sycophancy": "Sycophancy",
+                  "style": "Style", "injection": "Injection"}
+_SUBSET_LABEL = {"id": "in-distribution", "ood": "out-of-distribution"}
+
+# Fixed order, so the legend never reshuffles between models or reruns.
+VALENCE_LEGEND = [
+    ("vulnerability", "a vulnerability"),
+    ("informational", "a preference that may be legitimate"),
+    ("healthy", "the model behaving correctly"),
+]
+
+
+def _first_clause(title: str, limit: int = 54) -> str:
+    """Fallback for a finding kind with no short form: the sentence up to its first break."""
+    for sep in (", so ", ". ", " ("):
+        cut = title.find(sep)
+        if 0 < cut <= limit:
+            return title[:cut]
+    return title if len(title) <= limit else title[:limit - 1].rsplit(" ", 1)[0] + "\u2026"
+
+
+def _describe(category: str, detail: dict, title: str) -> str:
+    """A short name for one finding, rebuilt from its structured detail.
+
+    Titles are whole sentences baked in at scan time and carry their own numbers, which makes them
+    unusable as axis ticks: they truncate mid-word, repeat what the bar already shows, and never
+    say which category the row belongs to. Deriving the label from ``detail`` instead means result
+    files written before this existed get the short labels too, with no rescan.
+    """
+    kind = detail.get("kind")
+    if category == "injection":
+        if kind == "best_affix":
+            return f"best single affix: {detail.get('affix_id', 'unknown')}"
+        if kind == "beam_search":
+            return "best stacked attack"
+        if kind == "contamination":
+            return f"junk {detail.get('where', 'added')} to a good answer"
+        if kind == "key_contrast":
+            return title.split(":")[0].replace(" versus its control ", " vs ")
+    elif category == "identity":
+        if kind == "descriptor":
+            return f"{detail.get('axis', 'unknown')} descriptor swap"
+        if kind == "omnibus":
+            sub = _SUBSET_LABEL.get(detail.get("subset"))
+            return f"name swap, {sub}" if sub else "name swap"
+    elif category == "style":
+        if kind == "length_adjusted":
+            return f"{detail.get('transform', 'unknown').replace('_', ' ')}, length-adjusted"
+        if kind == "quality_control":
+            return "genuine elaboration vs filler"
+    elif category == "sycophancy":
+        if kind == "insistence_slope":
+            lvl = LADDER_LABEL.get(detail.get("level"))
+            return f"agreeing pays more when the user {lvl}" if lvl else "agreeing under pressure"
+        if kind == "main_effect":
+            return "agreeing rather than correcting"
+    return _first_clause(title)
+
+
+def finding_labels(findings: list[dict]) -> list[str]:
+    """Short labels ending in the category, guaranteed unique.
+
+    The category goes last, which reads a little oddly in isolation but scans far better on a
+    chart: plotly right-aligns tick labels, so a trailing category lines up in a column next to
+    the bars, while a leading one lands at a different offset on every row.
+
+    Uniqueness is load-bearing rather than cosmetic: plotly places two bars sharing a y value on
+    the same row, so a duplicate label silently hides a finding.
+    """
+    cats = [CATEGORY_LABEL.get(f.get("category"), f.get("category") or "?") for f in findings]
+    bodies = [_describe(f.get("category"), f.get("detail") or {}, f.get("title") or "")
+              for f in findings]
+    counts = Counter(zip(cats, bodies))
+    if any(c > 1 for c in counts.values()):
+        # What separates two findings with the same name is their size, so show it. It goes before
+        # the category so the category column stays flush.
+        bodies = [f"{b}  ({f.get('effect') or 0:+.2f})" if counts[(c, b)] > 1 else b
+                  for c, b, f in zip(cats, bodies, findings)]
+    seen, out = Counter(), []
+    for c, b in zip(cats, bodies):
+        seen[(c, b)] += 1
+        n = seen[(c, b)]
+        out.append(f"{b}{'' if n == 1 else f' #{n}'}  <b>{c}</b>")
+    return out
+
+
+# --------------------------------------------------------------------------------------
 # the signature chart: every finding measured against rewording noise
 # --------------------------------------------------------------------------------------
 
 
+MAX_ROWS = 16
+
+
 def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
-    """Every finding against what arbitrary wording could fake at its own sample size.
+    """Every finding against what rewording alone could produce at its own sample size.
 
     On a shared "multiples of the bar" scale rather than in logits, because each finding averages a
     different number of comparisons and so has a different bar. Anything left of 1.0 is the size
@@ -70,28 +167,43 @@ def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     """
     sel = [f for f in findings
            if f.get("effect") is not None and f.get("systematic_bar")]
-    sel = sorted(sel, key=lambda f: abs(f["effect"]) / f["systematic_bar"])[-16:]
-    labels = [(f["title"][:66] + "...") if len(f["title"]) > 66 else f["title"] for f in sel]
+    sel = sorted(sel, key=lambda f: abs(f["effect"]) / f["systematic_bar"])[-MAX_ROWS:]
+    labels = finding_labels(sel)
     vals = [abs(f["effect"]) / f["systematic_bar"] for f in sel]
-    colors = [VALENCE_COLOR.get(f.get("valence"), INK2) for f in sel]
     fig = go.Figure()
     fig.add_vrect(x0=0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
     fig.add_vline(x=1, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=1, y=len(sel) - 0.4, text="what wording alone could fake",
+    fig.add_annotation(x=1, y=len(sel) - 0.4, text="as far as rewording alone gets",
                        showarrow=False, xanchor="left", xshift=6,
                        font=dict(size=11, color=INK2))
-    for lab, v, c, f in zip(labels, vals, colors, sel):
+
+    # One trace per valence rather than per bar, so the colours get a real legend instead of
+    # living only in a caption below the chart. Any valence outside the fixed list still gets a
+    # trace, because a finding dropped for having an unexpected label would vanish silently.
+    known = [v for v, _ in VALENCE_LEGEND]
+    groups = VALENCE_LEGEND + [(v, str(v)) for v in dict.fromkeys(f.get("valence") for f in sel)
+                               if v not in known]
+    for valence, name in groups:
+        rows = [(lab, v, f) for lab, v, f in zip(labels, vals, sel)
+                if f.get("valence") == valence]
+        if not rows:
+            continue
         fig.add_trace(go.Bar(
-            y=[lab], x=[v], orientation="h", marker=dict(color=c), width=0.62,
-            customdata=[[f["valence"], f["effect"], f["systematic_bar"], f.get("n_items") or 0]],
-            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:+.2f} logits"
-                          "<br>%{x:.1f}x the bar of %{customdata[2]:.2f}"
-                          " over %{customdata[3]} comparisons<extra></extra>",
-            showlegend=False))
+            y=[r[0] for r in rows], x=[r[1] for r in rows], orientation="h", width=0.62,
+            name=name, marker=dict(color=VALENCE_COLOR.get(valence, INK2)),
+            customdata=[[r[2]["effect"], r[2]["systematic_bar"], r[2].get("n_items") or 0]
+                        for r in rows],
+            hovertemplate="<b>%{y}</b><br>%{customdata[0]:+.2f} logits"
+                          "<br>%{x:.1f}x what rewording alone could produce"
+                          " (%{customdata[1]:.2f} over %{customdata[2]} comparisons)"
+                          "<extra></extra>"))
     fig.update_traces(marker_cornerradius=4)
-    _base(fig, height=height or max(300, 34 * len(sel) + 90),
-          xtitle="size relative to what arbitrary wording could fake (1.0 = the bar)")
-    fig.update_yaxes(tickfont=dict(size=11, color=INK))
+    _base(fig, height=height or max(300, 34 * len(sel) + 110), showlegend=True,
+          xtitle="multiples of what rewording alone could produce")
+    # Sorted order has to be restated: with one trace per valence, plotly would otherwise order
+    # the axis by first appearance and scatter the ranking.
+    fig.update_yaxes(categoryorder="array", categoryarray=labels,
+                     tickfont=dict(size=11, color=INK))
     fig.update_xaxes(range=[0, max(vals + [1.0]) * 1.12])
     return fig
 
@@ -123,40 +235,57 @@ def noise_floor_hist(noise: dict) -> go.Figure:
 
 
 def identity_groups(block: dict) -> go.Figure:
+    """Do the identity groups fit inside what reshuffling the names produces by chance?
+
+    One chart, not two. The statistic behind the p-value is exactly the top-to-bottom spread of
+    these group means, so drawing the null as a band of exactly that width, laid over the observed
+    range, turns the test into something readable off the picture: if every group fits inside the
+    band, the spread is no bigger than chance. Two separate charts, group means beside a
+    chance-versus-observed pair, told the same story twice and never showed that the second
+    chart's "observed" bar *was* the distance between the first chart's outermost bars.
+    """
     gm = block["group_means"]
-    order = sorted(gm, key=lambda k: -gm[k])
-    # Matched to the aggregation level of the bars: half-group means, not single names.
-    ctrl = block.get("half_split_control", block["within_group_control"])["p95_abs_diff"]
-    fig = go.Figure()
-    for i, g in enumerate(order):
-        fig.add_trace(go.Bar(
-            x=[g.replace("_", " ")], y=[gm[g]], marker=dict(color=SERIES[i]), width=0.55,
-            text=[f"{gm[g]:+.3f}"], textposition="outside",
-            textfont=dict(size=12, color=INK),
-            hovertemplate=f"{g}<br>mean %{{y:+.3f}} logits<extra></extra>", showlegend=False))
-    fig.add_hrect(y0=-ctrl, y1=ctrl, fillcolor="#8a8a85", opacity=0.13, line_width=0,
-                  annotation_text="chance spread from name choice alone (95% of the time)",
-                  annotation_position="bottom right", annotation_font=dict(size=11, color=INK2))
-    fig.update_traces(marker_cornerradius=4)
-    _base(fig, height=340, ytitle="mean score, template-centred")
-    fig.update_yaxes(showgrid=True, gridcolor=GRID)
-    return fig
-
-
-def identity_permutation(block: dict) -> go.Figure:
     o = block["omnibus_permutation"]
+    order = sorted(gm, key=lambda k: gm[k])           # ascending; plotly draws index 0 at the foot
+    labels = [g.replace("_", " ") for g in order]
+    vals = [gm[g] for g in order]
+    lo, hi = vals[0], vals[-1]
+    spread, chance = hi - lo, o["null_p95"]
+    mid = (lo + hi) / 2
+    beyond = spread > chance
+    extreme = STATUS["critical"] if beyond and o["p_value"] < 0.05 else INK2
+
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=["chance (95th pct)", "observed"],
-                         y=[o["null_p95"], o["statistic"]],
-                         marker=dict(color=["#8a8a85", STATUS["critical"]
-                                            if o["p_value"] < 0.05 else "#8a8a85"]),
-                         width=0.5,
-                         text=[f"{o['null_p95']:.3f}", f"{o['statistic']:.3f}"],
-                         textposition="outside", textfont=dict(size=12, color=INK),
-                         showlegend=False))
-    fig.update_traces(marker_cornerradius=4)
-    _base(fig, height=300, ytitle="largest gap between identity groups, logits")
-    fig.update_yaxes(showgrid=True, gridcolor=GRID)
+    fig.add_vrect(x0=mid - chance / 2, x1=mid + chance / 2, fillcolor="#8a8a85", opacity=0.13,
+                  line_width=0)
+    # Ends marked, so the band reads as a width to compare against rather than as a zone.
+    for x in (mid - chance / 2, mid + chance / 2):
+        fig.add_vline(x=x, line=dict(color="#8a8a85", width=1, dash="dot"))
+    fig.add_annotation(x=mid, y=len(vals) - 0.42, yanchor="bottom", showarrow=False,
+                       text=f"chance spread, {chance:.2f} wide",
+                       font=dict(size=11, color=INK2))
+    # A rule joining the two extremes: this distance is the statistic being tested.
+    fig.add_shape(type="line", x0=lo, x1=hi, y0=-0.45, y1=-0.45, xref="x", yref="y",
+                  line=dict(color=extreme, width=2))
+    fig.add_annotation(x=mid, y=-0.5, yanchor="top", showarrow=False,
+                       text=f"observed spread, {spread:.2f}",
+                       font=dict(size=11, color=extreme))
+    fig.add_trace(go.Scatter(
+        x=vals, y=labels, mode="markers+text", showlegend=False,
+        marker=dict(size=[15 if v in (lo, hi) else 11 for v in vals],
+                    color=[extreme if v in (lo, hi) else INK2 for v in vals],
+                    line=dict(width=2, color="#ffffff")),
+        text=[f"{v:+.2f}" for v in vals], textposition="top center",
+        textfont=dict(size=11, color=INK2),
+        hovertemplate="%{y}<br>mean %{x:+.3f} logits<extra></extra>"))
+    _base(fig, height=330, xtitle="mean score for that group, with each template centred on zero")
+    fig.update_yaxes(categoryorder="array", categoryarray=labels,
+                     tickfont=dict(size=12.5, color=INK))
+    pad = max(spread, chance) * 0.22 + 0.04
+    fig.update_xaxes(range=[mid - max(spread, chance) / 2 - pad,
+                            mid + max(spread, chance) / 2 + pad],
+                     showgrid=True, gridcolor=GRID)
+    fig.update_layout(margin=dict(l=8, r=16, t=28, b=52))
     return fig
 
 
@@ -166,11 +295,7 @@ def identity_permutation(block: dict) -> go.Figure:
 
 
 LADDER = ["neutral", "expertise", "emotional"]
-LADDER_LABEL = {
-    "neutral": "asks neutrally",
-    "expertise": "claims expertise",
-    "emotional": "is emotionally invested",
-}
+LADDER_LABEL = INSISTENCE_PHRASE
 
 
 def sycophancy_ladder(block: dict, noise: dict | None = None) -> go.Figure:
@@ -430,15 +555,15 @@ def compare_findings(rows: list[dict], label_a: str, label_b: str) -> go.Figure:
 
 # Identity is non-directional: a shift either way is bias, so magnitude is the whole story.
 UNSIGNED_STATES = [
-    ("bigger than wording could fake", STATUS["critical"]),
-    ("real, but no bigger than wording", STATUS["warning"]),
+    ("bigger than rewording alone", STATUS["critical"]),
+    ("real, but no bigger than rewording alone", STATUS["warning"]),
     ("not statistically confirmed", "#9a9a95"),
 ]
 # Style and sycophancy are directional: only one direction is a fault. Being pushed the *other*
 # way is the model resisting, and colouring that like a vulnerability would be a lie.
 SIGNED_STATES = [
-    ("{bad}, bigger than wording could fake", STATUS["critical"]),
-    ("{bad}, but no bigger than wording", STATUS["warning"]),
+    ("{bad}, bigger than rewording alone", STATUS["critical"]),
+    ("{bad}, but no bigger than rewording alone", STATUS["warning"]),
     ("{good}", STATUS["good"]),
     ("not statistically confirmed", "#9a9a95"),
 ]
@@ -468,7 +593,7 @@ def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
               bad_label: str = "rewarded", good_label: str = "penalised, the model resists it",
               xtitle: str | None = None, height: int | None = None,
               xmax: float | None = None) -> go.Figure:
-    """Every probe in one module, against what arbitrary wording could fake at its own sample size.
+    """Every probe in one module, against what rewording alone could produce at its own size.
 
     Plotted as a multiple of that bar rather than in raw logits. Each probe averages a different
     number of comparisons, so each has a different bar, and one shaded band in logits would be
@@ -501,7 +626,7 @@ def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
     fig.add_vrect(x0=-1 if signed else 0, x1=1, fillcolor="#8a8a85", opacity=0.11, line_width=0)
     for x in ([1, -1] if signed else [1]):
         fig.add_vline(x=x, line=dict(color="#8a8a85", width=2, dash="dot"))
-    fig.add_annotation(x=1, y=len(items) - 0.35, text="what wording alone could fake",
+    fig.add_annotation(x=1, y=len(items) - 0.35, text="as far as rewording alone gets",
                        showarrow=False, xanchor="left", xshift=6,
                        font=dict(size=11, color=INK2))
     fig.add_trace(go.Bar(
@@ -513,8 +638,8 @@ def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
                      r.get("systematic_bar") or 0, r.get("n_items") or 0]
                     for r, st in zip(items, states)],
         hovertemplate="<b>%{y}</b><br>%{customdata[2]:+.2f} logits"
-                      "<br>%{x:.1f}x the bar of %{customdata[3]:.2f}"
-                      " over %{customdata[4]} comparisons"
+                      "<br>%{x:.1f}x what rewording alone could produce"
+                      " (%{customdata[3]:.2f} over %{customdata[4]} comparisons)"
                       "<br>%{customdata[1]}<br>%{customdata[0]}<extra></extra>"))
     for st, name in enumerate(names):
         if st in states:
@@ -522,7 +647,7 @@ def bias_bars(items: list[dict], *, signed: bool = False, fault: bool = True,
                                  marker=dict(color=palette[st][1]), width=0.6, hoverinfo="skip"))
     fig.update_traces(marker_cornerradius=4)
     _base(fig, height=height or max(260, 40 * len(items) + 110), showlegend=True,
-          xtitle=xtitle or "size relative to what arbitrary wording could fake (1.0 = the bar)")
+          xtitle=xtitle or "multiples of what rewording alone could produce")
     fig.update_yaxes(tickfont=dict(size=12.5, color=INK))
     span = xmax if xmax is not None else max(max(abs(v) for v in vals), 1.0) * 1.28
     fig.update_xaxes(range=[-span, span] if signed else [0, span])

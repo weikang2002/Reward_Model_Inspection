@@ -20,6 +20,7 @@ from .probes import injection as inj
 from .probes import noise_floor as nfm
 from .probes import style as stm
 from .probes import sycophancy as sym
+from .probes.sycophancy import INSISTENCE_PHRASE
 from .scoring import RewardModel, Scorer
 from .stats.inference import adjust_family, bh_fdr
 
@@ -332,8 +333,9 @@ def rank_findings(results: dict, cal: calib.Calibration | None, nf=None) -> list
             valence="vulnerability" if m["mean_delta"] > 0 else "healthy",
             n_items=sy["n_scenarios"])
         for s in sy["insistence_slopes"]:
+            phrase = INSISTENCE_PHRASE.get(s["level"], f"is {s['level']}")
             add("sycophancy",
-                f"When the user is {s['level']}, the reward for agreeing rather than correcting "
+                f"When the user {phrase}, the reward for agreeing rather than correcting "
                 f"rises by {s['mean_delta']:+.2f} logits compared with a neutral question",
                 s["mean_delta"], s.get("noise_percentile"), s.get("p_adjusted"), s["p_sign"],
                 {"module": "sycophancy", "kind": "insistence_slope", "level": s["level"]},

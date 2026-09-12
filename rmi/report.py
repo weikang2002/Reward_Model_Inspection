@@ -122,15 +122,41 @@ def build(results: dict, out_path: Path | str) -> Path:
       f"{meta['seed']} · {meta['started']} · {meta.get('provenance', {}).get('device', '?')}</p>")
     A(overview_verdict(R, cal))
 
-    # -- yardsticks -------------------------------------------------------------------
-    A("<h2>Read every result against these two numbers</h2><div class='grid g2'>")
+    # -- severity ---------------------------------------------------------------------
+    A("<h2>Where the problems are</h2><div class='grid g4'>")
+    for cat, s in sev.summarise_all(R["findings"]).items():
+        worst_pct = f"{s['severity']:.1f}x" if s.get("severity") is not None else "n/a"
+        A(f"<div class='tile'><h4>{cat}</h4>"
+          f"<span class='band' style='background:{viz.BAND_COLOR.get(s['band'], '#8a8a85')}'>"
+          f"{html.escape(s['band'])}</span>"
+          f"<p><b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> possible "
+          "problems here are big enough to matter.<br>Worst confirmed effect: "
+          f"<b>{worst_pct}</b> what rewording alone could produce.</p></div>")
+    A("</div><p class='sub'>Bands are the <i>worst confirmed</i> effect in a category, as a "
+      "multiple of what rewording alone could produce across the same number of comparisons: "
+      "below "
+      "1x Negligible, to 2x Low, to 4x Moderate, above that High. Findings showing the model "
+      "behaving <i>well</i> are excluded.</p>")
+
+    if noise:
+        A("<h2>Every finding, on one scale</h2>")
+        A(_fig(viz.findings_vs_noise(R["findings"])))
+        scored = [f for f in R["findings"]
+                  if f.get("effect") is not None and f.get("systematic_bar")]
+        A(f"<p class='sub'>The {min(len(scored), viz.MAX_ROWS)} largest of {len(scored)} findings, "
+          "each labelled with the category it came from. Bars inside the shaded band are no "
+          "larger than rewording alone would produce at the same sample size.</p>")
+
+    # -- yardsticks, after the problems they calibrate ----------------------------------
+    A("<h2>The two yardsticks every number above is measured against</h2>"
+      "<div class='grid g2'>")
     if noise:
         A(f"<div class='yard'><span class='big'>±{noise['pairwise_sd']:.2f} logits</span>"
           "spread between two <b>meaning-preserving rewrites</b> of the same answer. One "
-          f"comparison moves up to {noise['per_comparison_bar']:.2f} on wording alone, which "
-          "swamps every bias effect here. But wording points in an arbitrary direction and cancels "
-          "when averaged, while a bias does not, so each finding is judged against that spread "
-          "shrunk to its own sample size.</div>")
+          f"comparison moves up to {noise['per_comparison_bar']:.2f} on rewording alone, which "
+          "swamps every bias effect here. But rewording pushes in an arbitrary direction, so it "
+          "mostly cancels when averaged over many answers, while a bias does not. Every finding "
+          "above is judged against that spread shrunk to its own sample size.</div>")
     if cal and cal.get("fitted"):
         A(f"<div class='yard'><span class='big'>{cal['accuracy']:.1%}</span>"
           "of the time this model agrees with <b>real human preference judgments</b> "
@@ -146,28 +172,6 @@ def build(results: dict, out_path: Path | str) -> Path:
           f"background:{'#f2faf2' if ok else '#fdf3f3'}\">"
           f"<b>{html.escape(check['headline'])}</b>"
           f"<span class='hint'>{html.escape(check['detail'])}</span></div>")
-
-    # -- severity ---------------------------------------------------------------------
-    A("<h2>Where the problems are</h2><div class='grid g4'>")
-    for cat, s in sev.summarise_all(R["findings"]).items():
-        worst_pct = f"{s['severity']:.1f}x" if s.get("severity") is not None else "n/a"
-        A(f"<div class='tile'><h4>{cat}</h4>"
-          f"<span class='band' style='background:{viz.BAND_COLOR.get(s['band'], '#8a8a85')}'>"
-          f"{html.escape(s['band'])}</span>"
-          f"<p><b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> possible "
-          "problems here are big enough to matter.<br>Worst confirmed effect: "
-          f"<b>{worst_pct}</b> what wording alone could fake.</p></div>")
-    A("</div><p class='sub'>Bands are the <i>worst confirmed</i> effect in a category, as a "
-      "multiple of what arbitrary wording could fake across the same number of comparisons: below "
-      "1x Negligible, to 2x Low, to 4x Moderate, above that High. Findings showing the model "
-      "behaving <i>well</i> are excluded.</p>")
-
-    if noise:
-        A("<h2>Every finding, on one scale</h2>")
-        A(_fig(viz.findings_vs_noise(R["findings"])))
-        A("<p class='sub'>Red is a vulnerability, green is the model behaving correctly, blue is "
-          "a preference that may be legitimate. Bars inside the shaded band are no larger than "
-          "arbitrary wording would produce at the same sample size.</p>")
 
     # -- findings ---------------------------------------------------------------------
     A("<h2>Ranked findings</h2>")
@@ -215,9 +219,7 @@ def build(results: dict, out_path: Path | str) -> Path:
             if not blk:
                 continue
             o = blk["omnibus_permutation"]
-            A(f"<h3>{label}</h3><div class='grid g3' style='grid-template-columns:2fr 1fr'>"
-              f"<div>{_fig(viz.identity_groups(blk))}</div>"
-              f"<div>{_fig(viz.identity_permutation(blk))}</div></div>")
+            A(f"<h3>{label}</h3>{_fig(viz.identity_groups(blk))}")
             # None when swapping names inside a group moves nothing at all, so there is no
             # within-group spread to take a ratio against. Formatting it blind crashed the build.
             ratio = blk.get("between_vs_within_ratio")
@@ -229,7 +231,9 @@ def build(results: dict, out_path: Path | str) -> Path:
             A(f"<p>The largest gap between identity groups is <code>{o['statistic']:.3f}</code> "
               f"logits. Reshuffling which names belong to which group {o['n_perm']:,} times, and "
               "only within blocks of equal name token length, produces a gap that large "
-              f"<b>p = {o['p_value']:.4f}</b> of the time.{compare}</p>")
+              f"<b>p = {o['p_value']:.4f}</b> of the time. The grey band above is how wide that "
+              f"reshuffled gap gets 95% of the time, <code>{o['null_p95']:.3f}</code>."
+              f"{compare}</p>")
             A(_table(blk["pairwise_gaps"],
                      ["group_a", "group_b", "gap", "ci_low", "ci_high", "p_wild", "q_value",
                       "noise_percentile"]))
@@ -258,7 +262,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         A("<p class='sub'>Above zero the model prefers agreeing with the user; below zero it "
           "prefers correcting them. Each scenario is written in two versions and both are scored; "
           "the premium is their average.</p>")
-        A("<h3>Does agreeing pay more as the user pushes harder?</h3>")
+        A("<h3>The reward for agreeing, as the user pushes harder</h3>")
         A(_fig(viz.sycophancy_ladder(sy)))
         A("<p class='sub'>Above the line the model prefers agreeing with the user; below it, "
           "correcting them. Each scenario is asked three ways, changing only how hard the user "
@@ -449,7 +453,7 @@ def build(results: dict, out_path: Path | str) -> Path:
     A("<h2>Appendix: how each number was produced</h2>")
     A(METHODOLOGY_HTML)
     if noise:
-        A("<h3>Noise floor in detail</h3>")
+        A("<h3>Rewording noise, in detail</h3>")
         A(_fig(viz.noise_floor_hist(noise)))
         A("<p class='sub'>Negative controls change bytes but not meaning, so they should be zero."
           "</p>")
@@ -459,7 +463,7 @@ def build(results: dict, out_path: Path | str) -> Path:
           f"{noise['determinism_delta']:.2e}; scoring alone versus inside a batch differs by "
           f"{noise['batch_invariance_delta']:.2e}.</p>")
     if cal and cal.get("fitted"):
-        A("<h3>Calibration against human preferences</h3>")
+        A("<h3>Agreement with human preferences, in detail</h3>")
         A(_fig(viz.calibration_reliability(cal)))
         A(f"<p>Fitted temperature <b>T = {cal['temperature']:.2f}</b> on {html.escape(cal['note'])}"
           f". A score difference of <i>d</i> logits means the model prefers that variant "

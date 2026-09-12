@@ -16,8 +16,9 @@ answer, and it is comparable across models even though their raw score scales ar
 from __future__ import annotations
 
 # Published thresholds, as a multiple of the effect's own systematic bar: how large a mean effect
-# arbitrary wording could fake across the same number of comparisons. A ratio of 1 means the effect
-# is exactly the size wording noise would produce by chance at that sample size.
+# rewording alone could produce across the same number of comparisons. A ratio of 1 means the
+# effect is exactly the size rewording would produce by chance at that sample size. "Rewording
+# alone" is the phrase every user-visible string uses for this; keep them in step.
 #
 # This replaced a percentile of the single-comparison noise floor, which answered the wrong
 # question. Wording perturbs one comparison far more than any bias does, but it points in an
@@ -31,7 +32,7 @@ BANDS = [
     ("High", 4.0),
 ]
 # One definition of "material", used by the category tiles and by each tab's verdict alike: the
-# effect is at least this multiple of what arbitrary wording could fake across the same number of
+# effect is at least this multiple of what rewording alone could produce across the same number of
 # comparisons. Two different bars would let a finding be material on the overview and immaterial
 # on its own tab, which is exactly what happened when there were two.
 MATERIALITY_RATIO = 1.0
@@ -62,7 +63,7 @@ def systematic_ratio(finding: dict) -> float | None:
 
 
 def is_material(finding: dict) -> bool:
-    """Confirmed, and at least as large as wording noise could fake at this sample size.
+    """Confirmed, and at least as large as rewording alone could produce at this sample size.
 
     The single definition. ``NoiseFloor.exceeds_systematic`` used to answer the same question
     separately and disagreed whenever the floor was degenerate, so it no longer exists.

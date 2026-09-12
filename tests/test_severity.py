@@ -194,3 +194,56 @@ def test_directional_modules_ignore_effects_running_the_other_way():
     html = verdict_line(resisted, "style", "style is rewarded")
     assert "never pushed toward" in html
     assert _banner_class(resisted, "style") == "clear"
+
+
+# ---------------------------------------------------------------------------------------
+# the wording the reader actually sees
+# ---------------------------------------------------------------------------------------
+
+# "what arbitrary wording could fake" was opaque to a first-time reader. One phrase now covers
+# every ratio in the UI, and these pin it so a later edit cannot quietly reintroduce a second one.
+RETIRED = ("could fake", "arbitrary wording", "that bar", "larger than 95%")
+
+
+def test_the_ratio_is_explained_in_one_phrase_everywhere():
+    html = verdict_line([item(2.4, ratio=2.4)], "identity", "X happens")
+    assert "rewording alone could produce" in html
+    assert not any(p in html for p in RETIRED), html
+
+
+def test_an_effect_exactly_at_the_threshold_is_not_called_bigger_than_it():
+    """'1.0 times bigger than X' claims it exceeds X when it is the same size."""
+    html = verdict_line([item(0.7, ratio=1.0)], "identity", "X happens")
+    assert "times bigger than" not in html
+    assert "1.0 times what rewording alone could produce" in html
+
+
+def test_a_single_probe_does_not_read_as_plural():
+    assert "probes shows that" in verdict_line([item(2.0, ratio=2.0)], "identity", "X happens")
+    two = verdict_line([item(2.0, ratio=2.0), item(3.0, ratio=3.0)], "identity", "X happens")
+    assert "probes show that" in two
+
+
+def test_an_immaterial_verdict_names_the_comparison_rather_than_a_bare_bar():
+    html = verdict_line([item(0.4, ratio=0.5)], "identity", "X happens")
+    assert "rewording alone" in html
+    assert "a bar of" not in html
+
+
+def test_the_overview_states_the_threshold_it_actually_applies():
+    """It advertised the percentile floor this design replaced, which tests a different thing."""
+    from rmi.findings import overview_verdict
+    R = {"findings": [finding(3.0, bar=1.0, valence="vulnerability", title="Something")]}
+    html = overview_verdict(R, None)
+    assert "rewording alone could produce at its own sample size" in html
+    assert not any(p in html for p in RETIRED), html
+
+
+@pytest.mark.parametrize("names,expected", [
+    (["a"], "a"),
+    (["a", "b"], "a and b"),
+    (["a", "b", "c"], "a, b and c"),
+])
+def test_categories_are_listed_not_chained_with_and(names, expected):
+    from rmi.findings import _listed
+    assert _listed(names) == expected

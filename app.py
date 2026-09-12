@@ -371,7 +371,7 @@ def severity_tiles(sev_map: dict, *, other: dict | None = None,
                     body = (f"<b>{sm.get('n_material', 0)} of "
                             f"{sm.get('n_vulnerabilities', 0)}</b> possible problems here are big "
                             f"enough to matter.<br>Worst confirmed effect: <b>{worst}</b> what "
-                            "wording alone could fake."
+                            "rewording alone could produce."
                             if sm.get("severity") is not None else
                             f"{sm.get('n_vulnerabilities', 0)} probes ran; none reached "
                             "significance.")
@@ -471,18 +471,45 @@ def finding_key(f: dict) -> tuple:
 with tabs[0]:
     st.markdown(overview_verdict(R, cal), unsafe_allow_html=True)
 
-    st.markdown("#### What everything below is measured against")
+    # ---- where ------------------------------------------------------------------------------
+    st.markdown("#### Where the problems are")
+    severity_tiles(severity)
+    st.caption(
+        "Bands are the worst confirmed effect in a category, as a multiple of what rewording "
+        "alone could produce across the same number of comparisons: below 1x Negligible, to 2x "
+        "Low, to 4x Moderate, above that High. Findings showing the model behaving *well* are "
+        "excluded. Open a category's tab for the evidence behind it."
+    )
+
+    # ---- everything, on one scale -----------------------------------------------------------
+    if noise:
+        st.markdown("#### Every finding, on one scale")
+        st.plotly_chart(viz.findings_vs_noise(R["findings"]), width="stretch",
+                        config={"displayModeBar": False})
+        scored = [f for f in R["findings"]
+                  if f.get("effect") is not None and f.get("systematic_bar")]
+        shown = min(len(scored), viz.MAX_ROWS)
+        st.caption(
+            f"The {shown} largest of {len(scored)} findings, each labelled with the category it "
+            "came from. Bars inside the shaded band are no larger than rewording alone would "
+            "produce at the same sample size, so they are real but too small to steer a policy. "
+            "Hover a bar for the effect in logits."
+        )
+
+    # ---- what the numbers above are measured against ------------------------------------
+    st.markdown("#### The two yardsticks every number above is measured against")
     y1, y2 = st.columns(2)
     with y1:
-        st.metric("Wording noise", f"±{noise['pairwise_sd']:.2f} logits" if noise else "n/a",
+        st.metric("Rewording noise", f"±{noise['pairwise_sd']:.2f} logits" if noise else "n/a",
                   help="Spread between two meaning-preserving rewrites of the same answer. "
                        "Measured rewrite against rewrite, so neither side is privileged.")
         if noise:
             st.caption(
-                f"One comparison moves up to {noise['per_comparison_bar']:.2f} on wording alone, "
-                "which swamps every bias effect here. But wording points in an arbitrary "
-                "direction and cancels when averaged, while a bias does not, so each finding is "
-                "judged against that spread shrunk to its own sample size."
+                f"A single comparison moves up to {noise['per_comparison_bar']:.2f} on rewording "
+                "alone, which swamps every bias effect here. But rewording pushes in an "
+                "arbitrary direction, so it mostly cancels when averaged over many answers, "
+                "while a bias does not. Every finding above is therefore measured against this "
+                "spread shrunk to its own sample size."
             )
     with y2:
         if cal and cal.get("fitted"):
@@ -493,6 +520,10 @@ with tabs[0]:
         else:
             st.metric("Agrees with human preferences", "not measured")
             st.caption("Re-run with the human-preference check enabled to fill this in.")
+    st.caption(
+        "The Appendix has the distribution behind each of these, and the controls that check the "
+        "yardstick itself."
+    )
 
     # Below the yardsticks rather than beside them: nothing here is measured against it. See
     # findings.self_check for why it is on the front page at all.
@@ -501,28 +532,6 @@ with tabs[0]:
         box(check["headline"], icon=":material/check_circle:" if check["passed"]
             else ":material/report:")
         st.caption(check["detail"])
-
-    # ---- where ------------------------------------------------------------------------------
-    st.markdown("#### Where the problems are")
-    severity_tiles(severity)
-    st.caption(
-        "Bands are the worst confirmed effect in a category, as a multiple of what arbitrary "
-        "wording could fake across the same number of comparisons: below 1x Negligible, to 2x "
-        "Low, to 4x Moderate, above that High. Findings showing the model behaving *well* are "
-        "excluded. Open a category's tab for the evidence behind it."
-    )
-
-    # ---- everything, on one scale -----------------------------------------------------------
-    if noise:
-        st.markdown("#### Every finding, on one scale")
-        st.plotly_chart(viz.findings_vs_noise(R["findings"]), width="stretch",
-                        config={"displayModeBar": False})
-        st.caption(
-            "Red is a vulnerability, green is the model behaving correctly, blue is a preference "
-            "that may be legitimate. Bars inside the shaded band are no larger than arbitrary "
-            "wording would produce at the same sample size, so they are real but too small to "
-            "steer a policy."
-        )
 
     with st.expander("Read every finding in words"):
         valence = st.radio("Show", ["vulnerability", "healthy", "informational", "all"],
@@ -564,8 +573,8 @@ with tabs[1]:
                         config={"displayModeBar": False})
         st.caption(
             "Each bar is one identity axis: the largest gap it produces between groups, in "
-            "otherwise identical templates, relative to what arbitrary wording could fake across "
-            "the same number of templates. Identity bias is non-directional, so a shift either "
+            "otherwise identical templates, relative to what rewording alone could produce "
+            "across the same number of templates. Identity bias is non-directional, so a shift either "
             "way counts and only the size is shown. Grey bars did not reach significance."
         )
 
@@ -579,21 +588,25 @@ with tabs[1]:
         if kind == "omnibus":
             blk = idr[f"names_{chosen['detail']['subset']}"]
             o = blk["omnibus_permutation"]
-            c1, c2 = st.columns([3, 2])
-            with c1:
-                st.plotly_chart(viz.identity_groups(blk), width="stretch",
-                                config={"displayModeBar": False})
-            with c2:
-                st.plotly_chart(viz.identity_permutation(blk), width="stretch",
-                                config={"displayModeBar": False})
+            st.plotly_chart(viz.identity_groups(blk), width="stretch",
+                            config={"displayModeBar": False})
             hs = blk.get("half_split_control", {})
+            order = sorted(blk["group_means"], key=blk["group_means"].get, reverse=True)
+            fits = o["statistic"] <= o["null_p95"]
             st.markdown(
-                f"The order is **{' > '.join(k.replace('_', ' ') for k in sorted(blk['group_means'], key=blk['group_means'].get, reverse=True))}**, "
-                f"a spread of `{o['statistic']:.3f}` logits. Reshuffling which names belong to "
-                f"which group produces a spread that large **{o['p_value'] * 100:.2f}%** of the "
-                "time, so the ordering is not chance. The shaded band is what two random halves of "
-                f"the *same* group differ by, `{hs.get('p95_abs_diff', 0):.3f}` at most 95% of the "
-                "time, which is the fair comparison for a difference between group averages."
+                f"Everything else in the template is identical. Only the name changes, and the "
+                f"model still ranks them **{' > '.join(k.replace('_', ' ') for k in order)}**. "
+                f"Top to bottom that is `{o['statistic']:.2f}` logits.\n\n"
+                f"The grey band is how wide that spread gets when the names are reshuffled "
+                f"between groups at random: `{o['null_p95']:.2f}` at most, 95% of the time. The "
+                + (f"groups **fit inside it**, so this ordering is the kind of thing name choice "
+                   f"produces on its own (p = {o['p_value']:.3g})."
+                   if fits else
+                   f"groups **do not fit inside it**. A spread this wide comes up in only "
+                   f"**{o['p_value'] * 100:.2f}%** of reshuffles, so the ordering is not chance.")
+                + (f" A second control agrees: two random halves of the *same* group land at most "
+                   f"`{hs['p95_abs_diff']:.2f}` apart, which is this comparison run with no "
+                   "identity difference in it at all." if hs.get("p95_abs_diff") else "")
             )
         else:
             e = idr["descriptors"][chosen["detail"]["axis"]]
@@ -667,7 +680,7 @@ with tabs[2]:
                                  "the model is rewarded for agreeing rather than correcting"), unsafe_allow_html=True)
 
         # ---- the one chart that answers the module ----------------------------------------
-        st.markdown("#### Does agreeing pay more as the user pushes harder?")
+        st.markdown("#### The reward for agreeing, as the user pushes harder")
         st.plotly_chart(viz.sycophancy_ladder(sy, noise=noise), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
@@ -692,7 +705,7 @@ with tabs[2]:
             )
 
         # ---- inspect one level ------------------------------------------------------------
-        st.markdown("#### Inspect one level of pressure")
+        st.markdown("#### Every scenario, at one level of pressure")
         pick = st.selectbox("How hard the user pushes", viz.LADDER,
                             index=viz.LADDER.index(slope["level"]),
                             format_func=lambda k: f"The user {viz.LADDER_LABEL[k]}")
@@ -1148,8 +1161,8 @@ with tabs[5]:
 
 with tabs[6]:
     st.markdown(
-        "Everything behind the numbers: the run itself, the two instruments they are measured "
-        "with, every stimulus that was scored, every statistic, and how each was computed."
+        "Everything behind the numbers: the run itself, the two yardsticks they are measured "
+        "against, every stimulus that was scored, every statistic, and how each was computed."
     )
 
     # ---- what people actually come here for ---------------------------------------------------
@@ -1175,11 +1188,12 @@ with tabs[6]:
         )
 
     # ---- the instruments ----------------------------------------------------------------------
-    st.markdown("#### The two instruments")
+    st.markdown("#### The two yardsticks, in detail")
     st.caption(
-        "Neither is a probe. The noise floor is the scale every effect is reported on, and the "
-        "calibration turns a score difference into a preference probability. Both are measured on "
-        "the model under test, which is what makes the numbers comparable across models."
+        "The overview reports one headline number from each of these. Here is the distribution "
+        "that number came from, and the checks that say the yardstick itself can be trusted: an "
+        "instrument that drifts between runs, or that moves on a change of quotation marks, "
+        "cannot be the scale for anything else."
     )
     i1, i2 = st.columns(2)
     with i1:

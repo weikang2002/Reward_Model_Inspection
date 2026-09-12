@@ -95,13 +95,83 @@ def test_bias_bars_with_nothing_to_plot_returns_an_empty_figure():
     assert len(fig.data) == 0
 
 
+def _bars(fig):
+    """Every bar across every trace. Bars are grouped into one trace per valence."""
+    return [(y, x) for t in fig.data for y, x in zip(t.y, t.x)]
+
+
 def test_findings_vs_noise_ranks_by_ratio_and_keeps_the_largest():
     findings = [{"title": f"f{i}", "effect": float(i), "systematic_bar": 1.0,
                  "valence": "vulnerability"} for i in range(1, 25)]
     fig = viz.findings_vs_noise(findings)
-    xs = [t.x[0] for t in fig.data]
+    xs = [x for _, x in _bars(fig)]
     assert max(xs) == 24.0, "the largest finding must survive the cap"
-    assert len(xs) == 16, "the chart caps how many it shows"
+    assert len(xs) == viz.MAX_ROWS, "the chart caps how many it shows"
+
+
+def test_every_bar_is_labelled_with_its_category():
+    """Titles alone made it impossible to tell an injection row from a style row."""
+    findings = [
+        {"title": "x", "effect": 3.0, "systematic_bar": 1.0, "valence": "vulnerability",
+         "category": "injection", "detail": {"kind": "best_affix", "affix_id": "sep_double"}},
+        {"title": "y", "effect": 2.0, "systematic_bar": 1.0, "valence": "informational",
+         "category": "style", "detail": {"kind": "length_adjusted", "transform": "emoji"}},
+    ]
+    labels = [y for y, _ in _bars(viz.findings_vs_noise(findings))]
+    assert any("sep_double" in lab for lab in labels), labels
+    assert any("emoji" in lab for lab in labels), labels
+    # Trailing, so right-aligned ticks put the categories in a column beside the bars.
+    assert all(lab.endswith("</b>") for lab in labels), labels
+    assert {lab.rsplit("<b>", 1)[1].rstrip("</b>") for lab in labels} == {"Injection", "Style"}
+
+
+def test_a_finding_with_an_unexpected_valence_is_still_drawn():
+    """Grouping into traces by valence would otherwise drop anything off the known list."""
+    findings = [{"title": "odd", "effect": 3.0, "systematic_bar": 1.0, "valence": "surprise",
+                 "category": "style", "detail": {}},
+                {"title": "normal", "effect": 2.0, "systematic_bar": 1.0,
+                 "valence": "vulnerability", "category": "style", "detail": {}}]
+    assert len(_bars(viz.findings_vs_noise(findings))) == 2
+
+
+def test_two_findings_that_describe_the_same_thing_get_distinct_rows():
+    """Bars sharing a y value land on one row, so a duplicate label hides a finding outright."""
+    same = {"category": "style", "detail": {"kind": "quality_control"},
+            "systematic_bar": 1.0, "valence": "healthy", "title": "elaboration beats filler"}
+    fig = viz.findings_vs_noise([dict(same, effect=2.01), dict(same, effect=1.98)])
+    labels = [y for y, _ in _bars(fig)]
+    assert len(set(labels)) == 2, labels
+    assert len(_bars(fig)) == 2
+
+
+def test_the_chart_legend_names_what_each_colour_means():
+    """The colours used to be decoded only by a caption underneath."""
+    findings = [{"title": "a", "effect": 3.0, "systematic_bar": 1.0, "valence": v,
+                 "category": "style", "detail": {}}
+                for v in ("vulnerability", "healthy", "informational")]
+    fig = viz.findings_vs_noise(findings)
+    assert fig.layout.showlegend
+    assert {t.name for t in fig.data} == {n for _, n in viz.VALENCE_LEGEND}
+
+
+def test_the_sorted_order_survives_being_split_across_traces():
+    findings = [{"title": f"f{i}", "effect": float(i), "systematic_bar": 1.0,
+                 "category": "style", "detail": {},
+                 "valence": "vulnerability" if i % 2 else "healthy"} for i in range(1, 9)]
+    fig = viz.findings_vs_noise(findings)
+    order = list(fig.layout.yaxis.categoryarray)
+    by_label = dict(_bars(fig))
+    assert [by_label[lab] for lab in order] == sorted(by_label.values())
+
+
+def test_an_insistence_level_reads_as_english_not_as_an_identifier():
+    """The label once interpolated the raw id, giving "when the user is expertise"."""
+    f = {"title": "t", "effect": 2.0, "systematic_bar": 1.0, "valence": "vulnerability",
+         "category": "sycophancy",
+         "detail": {"kind": "insistence_slope", "level": "expertise"}}
+    lab = [y for y, _ in _bars(viz.findings_vs_noise([f]))][0]
+    assert "claims expertise" in lab
+    assert "is expertise" not in lab
 
 
 def test_exploit_ranking_orders_by_success_rate_not_lift():
@@ -209,3 +279,96 @@ def test_a_failing_self_check_reaches_the_report(rendered, tmp_path):
     html = build(doctored, tmp_path / "fail.html").read_text()
     assert "Self-check failed" in html
     assert "abusive reply 0.61 logits above a supportive one" in html
+
+
+def test_a_finding_with_no_structured_detail_falls_back_to_a_trimmed_sentence():
+    """Any future finding kind still gets a usable tick rather than a 160-character sentence."""
+    long = ("Junk appended to a good answer costs 3.72 logits, so the model does notice "
+            "irrelevant text even when it is appended rather than prepended")
+    f = {"title": long, "effect": 3.0, "systematic_bar": 1.0, "valence": "healthy",
+         "category": "injection", "detail": {}}
+    lab = [y for y, _ in _bars(viz.findings_vs_noise([f]))][0]
+    assert lab == "Junk appended to a good answer costs 3.72 logits  <b>Injection</b>", lab
+
+
+# ---------------------------------------------------------------------------------------
+# the identity group chart
+# ---------------------------------------------------------------------------------------
+
+
+def _id_block(means, *, null_p95, p_value):
+    return {"group_means": means,
+            "half_split_control": {"p95_abs_diff": 0.2},
+            "within_group_control": {"p95_abs_diff": 0.6},
+            "omnibus_permutation": {"statistic": max(means.values()) - min(means.values()),
+                                    "null_p95": null_p95, "p_value": p_value, "n_perm": 10000}}
+
+
+def _band(fig):
+    """The one shaded rect: the spread reshuffling produces by chance."""
+    rects = [s for s in fig.layout.shapes if s.type == "rect"]
+    assert len(rects) == 1, rects
+    return rects[0].x0, rects[0].x1
+
+
+def test_the_chance_band_is_exactly_the_width_of_the_null_spread():
+    """The band's width is the statistic's null, so "do the groups fit" *is* the test."""
+    blk = _id_block({"a": 0.24, "b": 0.10, "c": -0.11, "d": -0.23}, null_p95=0.29, p_value=0.0001)
+    x0, x1 = _band(viz.identity_groups(blk))
+    assert x1 - x0 == pytest.approx(0.29)
+
+
+def test_the_chance_band_is_centred_on_the_observed_range():
+    """Off-centre, "fits inside the band" would stop matching spread <= null."""
+    blk = _id_block({"a": 1.24, "b": 1.10}, null_p95=0.29, p_value=0.3)
+    x0, x1 = _band(viz.identity_groups(blk))
+    assert (x0 + x1) / 2 == pytest.approx((1.24 + 1.10) / 2)
+
+
+def test_a_spread_beyond_chance_marks_the_two_groups_that_produced_it():
+    blk = _id_block({"a": 0.24, "b": 0.10, "c": -0.11, "d": -0.23}, null_p95=0.29, p_value=0.0001)
+    colors = list(viz.identity_groups(blk).data[0].marker.color)
+    assert colors.count(viz.STATUS["critical"]) == 2, colors
+    lo_hi = [c for v, c in sorted(zip([-0.23, -0.11, 0.10, 0.24], colors))]
+    assert lo_hi[0] == lo_hi[-1] == viz.STATUS["critical"], "the extremes are the marked pair"
+
+
+def test_a_spread_inside_chance_is_not_coloured_as_a_finding():
+    blk = _id_block({"a": 0.24, "b": 0.10, "c": -0.11, "d": -0.23}, null_p95=0.85, p_value=0.42)
+    colors = list(viz.identity_groups(blk).data[0].marker.color)
+    assert viz.STATUS["critical"] not in colors, colors
+
+
+def test_a_significant_p_with_a_spread_inside_the_band_is_not_flagged_red():
+    """Colour follows the picture. Red dots inside the band would contradict what is drawn."""
+    blk = _id_block({"a": 0.1, "b": 0.0}, null_p95=0.5, p_value=0.001)
+    assert viz.STATUS["critical"] not in list(viz.identity_groups(blk).data[0].marker.color)
+
+
+def test_groups_are_ordered_by_score_not_by_name():
+    blk = _id_block({"zeta": 0.4, "alpha": -0.4, "mid": 0.0}, null_p95=0.2, p_value=0.01)
+    fig = viz.identity_groups(blk)
+    assert list(fig.layout.yaxis.categoryarray) == ["alpha", "mid", "zeta"]
+
+
+def test_the_summary_and_the_appendix_name_the_yardsticks_the_same_way(rendered):
+    """The summary and the appendix cover the same two measures at two depths.
+
+    They once read as duplicates. A shared noun is what makes the appendix read as more detail
+    rather than as a second copy, so it is worth pinning against a rename touching only one.
+    """
+    _, html = rendered
+    assert "The two yardsticks every number above is measured against" in html
+    # The calibration half renders only when calibration ran, which this fixture skips.
+    assert "Rewording noise, in detail" in html
+    assert "instruments" not in html, "one noun for these two, not two nouns"
+
+
+def test_the_calibration_half_of_the_appendix_uses_the_same_naming(tmp_path):
+    scan = run_scan("stub", depth="quick", calibrate=False, verbose=False, out_dir=tmp_path,
+                    scorer=StubScorer(rule="length", coef=0.02))
+    scan["calibration"] = {"fitted": True, "temperature": 2.5, "note": "a held-out split",
+                           "accuracy": 0.63, "n_pairs": 500, "accuracy_ci": [0.59, 0.67],
+                           "median_abs_gap": 1.0, "bins": []}
+    html = build(scan, tmp_path / "cal.html").read_text()
+    assert "Agreement with human preferences, in detail" in html

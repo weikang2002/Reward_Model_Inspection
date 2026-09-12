@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 139 tests, ~25s
+uv run pytest -q                           # 147 tests, ~25s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -98,6 +98,35 @@ rule on each finding disagreed with this one whenever the floor was degenerate.
 and with a handful of probes a 90th percentile lands on the second largest and hides the finding
 the reader needs. A banner and its category pill must take their colour from the same `band()`
 call, or the same effect shows as a red alarm beside an amber chip.
+
+**"Yardstick" is the one noun for the noise floor and the human-agreement accuracy.** The overview,
+the compare tab and the appendix all describe the same two measures, and with three different
+framings the appendix read as a duplicate of the overview rather than as its evidence. The overview
+carries the headline number, the appendix the distribution behind it plus the controls that check
+the instrument, and both say so.
+
+**The identity group chart draws the test, rather than illustrating it.** The omnibus statistic
+*is* the top-to-bottom spread of the group means, so `viz.identity_groups` draws the permutation
+null as a band of exactly that width laid over the observed range: if every group fits inside the
+band, the spread is no bigger than chance. That replaced a pair of charts, group means beside a
+chance-versus-observed bar pair, which told the story twice and never revealed that the second
+chart's "observed" bar was the distance between the first chart's outermost bars. The dot colours
+follow the picture, not the p-value alone, so a red dot can never sit inside the band.
+
+**Chart labels come from `finding["detail"]`, never from `finding["title"]`.** Titles are whole
+sentences baked in at scan time carrying their own numbers, so as axis ticks they truncate
+mid-word and never say which category the row belongs to. `viz.finding_labels` rebuilds a short
+name from the structured detail, which also means result files written before it existed get the
+better labels with no rescan. It appends the category *last* because plotly right-aligns tick
+labels, so a trailing category forms a column beside the bars. It also guarantees uniqueness:
+two bars sharing a y value land on the same row, silently hiding one.
+
+**One phrase names the ratio, everywhere: "what rewording alone could produce".** Every band,
+bar, axis and verdict is a multiple of `systematic_bar`, and a reader meeting a bare "5.1x" has no
+idea what it is 5.1 times of. The phrase was "what arbitrary wording could fake", which nobody
+outside the project parsed. `tests/test_severity.py` pins the current wording and the retired
+phrasings, including "larger than 95% of ...", which described the percentile floor this design
+replaced and therefore stated a threshold the code does not apply.
 
 **`sanity_check.passed` is tri-state.** `None` means the scorer has no opinion about the model
 card example, which is the stub's case, and it is falsy, so the obvious rendering prints FAILS for
