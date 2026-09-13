@@ -221,7 +221,7 @@ def test_the_style_tab_sections_account_for_the_whole_of_its_tile():
     # The tab's own verdict covers both sections, so it states the tile's count and takes its
     # colour from the tile's worst effect. A reader comparing the two screens compares these.
     html = verdict_line(transforms + check, "style", "style is rewarded")
-    assert f'<b>{tile["n_material"]} of {tile["n_vulnerabilities"]}</b>' in html, html
+    assert f'{tile["n_material"]} of {tile["n_vulnerabilities"]} probes' in html, html
     assert f'{tile["severity"]:.1f} times' in html, html
     assert sv.band(tile["severity"], confirmed=True) == "Moderate"
     assert 'class="verdict"' in html, "a red tile cannot show a mild banner on its own tab"
@@ -233,6 +233,8 @@ def test_every_material_finding_is_named_not_just_the_largest():
     items = [item(0.37, ratio=4.9, label=same), item(0.29, ratio=3.9, label=same),
              item(0.10, ratio=1.3, label="flattery")]
     html = verdict_line(items, "style", "style is rewarded")
+    # The answer is the headline; each finding behind it is its own bullet.
+    assert html.count("<li>") == 2 and "<ul>" in html, html
     assert "The other 2:" in html
     assert "flattery" in html and "1.3x" in html and "3.9x" in html
     # The two that share a label differ only by their size, so the size has to be shown or the
@@ -530,3 +532,26 @@ def test_a_tile_with_nothing_confirmed_says_what_it_actually_counted():
     # And the confirmed case still leads with the tile's own count.
     live = tile_body({"n_material": 2, "n_vulnerabilities": 6, "n_contrasts": 8, "severity": 4.91})
     assert "<b>2 of 6</b>" in live and "4.9x" in live
+
+
+def test_every_banner_is_a_headline_over_bullets():
+    """One shape for all five, built by `findings.banner`: the answer on its own line, each number
+    behind it on its own row. Paragraphs read as something to work through."""
+    from rmi.findings import banner
+    html = banner(" mild", "Lead sentence.", ["first", "", "second"], "a hint")
+    assert html.startswith('<div class="verdict mild"><b>Lead sentence.</b>')
+    assert html.count("<li>") == 2, "an empty bullet is dropped rather than drawn blank"
+    assert '<span class="hint">a hint</span>' in html
+    # No bullets means no empty list rather than an <ul></ul>.
+    assert "<ul>" not in banner("", "Just the lead.", [])
+
+
+def test_the_verdict_banners_all_use_it():
+    """A hand-built banner on one tab is how the reward-hacking one came to hardcode its colour."""
+    items = [item(2.4, ratio=2.4)]
+    for html in (verdict_line(items, "identity", "X happens"),
+                 verdict_line([item(0.4, ratio=0.5)], "identity", "X happens"),
+                 verdict_line([item(0.5, ratio=0.5, confirmed=False)], "identity", "X happens"),
+                 verdict_line([item(-9.0, ratio=9.0, adverse=False)], "style", "X happens")):
+        assert html.startswith('<div class="verdict'), html
+        assert "<li>" in html, html

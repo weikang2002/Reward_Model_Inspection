@@ -246,6 +246,20 @@ _BAND_CLASS = {"High": "", "Moderate": "", "Low": " mild",
                "None detected": " clear", "No data": " mild"}
 
 
+def banner(cls: str, lead: str, bullets: list[str], hint: str = "") -> str:
+    """A verdict banner: the answer in one line, then the evidence as bullets.
+
+    Every banner on the first five tabs is built here, so none of them can drift into a different
+    shape. Prose paragraphs read as something to work through; the answer belongs on its own line
+    and each number that supports it on its own row.
+    """
+    items = "".join(f"<li>{b}</li>" for b in bullets if b)
+    return (f'<div class="verdict{cls}"><b>{lead}</b>'
+            + (f"<ul>{items}</ul>" if items else "")
+            + (f'<span class="hint">{hint}</span>' if hint else "")
+            + "</div>")
+
+
 def tile_body(summary: dict) -> str:
     """The sentence under a category tile, phrased once for both renderers.
 
@@ -286,8 +300,7 @@ def verdict_line(items: list[dict], category: str, phrase: str, *, extra: str = 
     weaker version of the fault, so it is never counted toward the verdict.
     """
     if not items:
-        return f'<div class="verdict clear">Nothing measured for {category}.</div>'
-    hint = f'<span class="hint">{extra}</span>' if extra else ""
+        return banner(" clear", f"Nothing measured for {category}.", [])
     # The denominator below is the adverse probes, not every probe run, because that is what the
     # category tile on the overview counts: `severity.summarise` builds its "N of M" over the
     # vulnerability-valenced findings alone, so counting every probe here made the same category
@@ -300,37 +313,35 @@ def verdict_line(items: list[dict], category: str, phrase: str, *, extra: str = 
         ranked = sorted(material, key=lambda i: -(i.get("ratio") or 0))
         worst, rest = ranked[0], ranked[1:]
         cls = _BAND_CLASS.get(band(worst.get("ratio"), confirmed=True), "")
-        # Naming only the largest left the rest of the count unlocatable: a reader told "3 of 6"
-        # could find one of them on the tab and had no way to know what the other two were.
-        others = (f' The other {"one" if len(rest) == 1 else len(rest)}: {_material_list(rest, ranked)}.'
-                  if rest else "")
-        return (f'<div class="verdict{cls}"><b>{len(material)} of {len(adverse)}</b> probes '
-                f'{"shows" if len(material) == 1 else "show"} that {phrase} systematically. The largest is <b>{_esc(worst["label"])}</b>, '
-                f'{abs(worst["effect"]):.2f} logits, which is {worst["ratio"]:.1f} times what '
-                f'rewording alone could produce across the same {worst["n_items"]} '
-                'comparisons.'
-                f'{others}{hint}</div>')
+        return banner(
+            cls,
+            f'{len(material)} of {len(adverse)} probes '
+            f'{"shows" if len(material) == 1 else "show"} that {phrase} systematically.',
+            [f'Largest: <b>{_esc(worst["label"])}</b> — {abs(worst["effect"]):.2f} logits, '
+             f'{worst["ratio"]:.1f} times what rewording alone could produce across the same '
+             f'{worst["n_items"]} comparisons.',
+             (f'The other {"one" if len(rest) == 1 else len(rest)}: '
+              f'{_material_list(rest, ranked)}.' if rest else "")],
+            extra)
     if confirmed:
         top = max(confirmed, key=lambda i: i.get("ratio") or 0)
         bar = top.get("systematic_bar")
-        tail = (f' It is {abs(top["effect"]):.2f} logits, against {bar:.2f} for rewording'
-                f' alone'
-                if bar else f' It is {abs(top["effect"]):.2f} logits')
-        return (f'<div class="verdict mild">Nothing here is bigger than rewording alone could '
-                f'produce at this sample size. <b>{len(confirmed)} of {len(adverse)}</b> are still '
-                f'statistically real, the largest being <b>{_esc(top["label"])}</b>.{tail}.'
-                '<span class="hint">More items would lower what rewording alone can produce: it '
-                'falls as one over the square root of the number of comparisons averaged.'
-                '</span></div>')
+        against = (f", against {bar:.2f} for rewording alone" if bar else "")
+        return banner(
+            " mild",
+            "Nothing here is bigger than rewording alone could produce at this sample size.",
+            [f'{len(confirmed)} of {len(adverse)} are still statistically real.',
+             f'Largest: <b>{_esc(top["label"])}</b> — {abs(top["effect"]):.2f} logits{against}.'],
+            "More items would lower what rewording alone can produce: it falls as one over the "
+            "square root of the number of comparisons averaged.")
     if adverse:
-        return (f'<div class="verdict clear">No statistically confirmed evidence that {phrase}. '
-                f'{len(items) - len(adverse)} of {len(items)} probes run the other way.'
-                f'{hint}</div>')
-    return (f'<div class="verdict clear">The model is never pushed toward {phrase}. '
-            f'<b>All {len(items)}</b> probes run the other way, which is the model resisting '
-            f'rather than rewarding it.{hint}</div>')
-
-
+        return banner(
+            " clear", f"No statistically confirmed evidence that {phrase}.",
+            [f"{len(items) - len(adverse)} of {len(items)} probes run the other way."], extra)
+    return banner(
+        " clear", f"The model is never pushed toward {phrase}.",
+        [f"All {len(items)} probes run the other way, which is the model resisting rather than "
+         "rewarding it."], extra)
 
 
 def self_check(results: dict) -> dict | None:
@@ -387,15 +398,15 @@ def overview_verdict(results: dict, cal: dict | None) -> str:
     at_chance = bool(cal and cal.get("fitted") and cal["accuracy_ci"][0] <= 0.5)
 
     if at_chance:
-        extra = ""
-        if material:
-            worst = max(material, key=lambda f: systematic_ratio(f) or 0)
-            extra = (f" It is also exploitable: {_esc(worst['title'][0].lower() + worst['title'][1:])}")
-        return ('<div class="verdict"><b>This reward model does not beat chance on human '
-                f'preferences.</b> It agrees with real human judgments {cal["accuracy"]:.1%} of '
-                f'the time and its interval reaches down to {cal["accuracy_ci"][0]:.1%}, so it is '
-                'not tracking human judgment at all. That is a more serious problem than any bias '
-                f'below.{extra}</div>')
+        worst = max(material, key=lambda f: systematic_ratio(f) or 0) if material else None
+        return banner(
+            "", "This reward model does not beat chance on human preferences.",
+            [f'It agrees with real human judgments {cal["accuracy"]:.1%} of the time, and its '
+             f'interval reaches down to {cal["accuracy_ci"][0]:.1%}: it is not tracking human '
+             'judgment at all.',
+             "That is a more serious problem than any bias below.",
+             (f'It is also exploitable: '
+              f'{_esc(worst["title"][0].lower() + worst["title"][1:])}' if worst else "")])
 
     if material:
         worst = max(material, key=lambda f: systematic_ratio(f) or 0)
@@ -411,23 +422,25 @@ def overview_verdict(results: dict, cal: dict | None) -> str:
                 "It is the only finding bigger than rewording alone could produce at its own "
                 "sample size.")
         also = f", alongside {_listed(others)}" if others else ""
-        return (f'<div class="verdict{cls}"><b>The clearest exposure is '
-                f'{_esc(worst["category"])}{_esc(also)}.</b> '
-                f'{_esc(worst["title"])}<span class="hint">{_esc(tail)}</span></div>')
+        return banner(
+            cls, f'The clearest exposure is {_esc(worst["category"])}{_esc(also)}.',
+            [_esc(worst["title"]), _esc(tail)])
 
     if confirmed:
         top = max(confirmed, key=lambda f: systematic_ratio(f) or 0)
-        return ('<div class="verdict mild"><b>Nothing found here is large enough to matter.</b> '
-                f'Every one of the {len(confirmed)} confirmed effects is smaller than '
-                'what rewording alone could produce across the same number of comparisons. The '
-                f'largest is {_esc(top["title"])}'
-                '<span class="hint">An effect can be statistically solid and still be too small '
-                'to steer a policy. More items lower what rewording alone can produce, as one '
-                'over the square root of the number of comparisons.</span></div>')
+        return banner(
+            " mild", "Nothing found here is large enough to matter.",
+            [f'Every one of the {len(confirmed)} confirmed effects is smaller than what rewording '
+             'alone could produce across the same number of comparisons.',
+             f'Largest: {_esc(top["title"])}'],
+            "An effect can be statistically solid and still be too small to steer a policy. More "
+            "items lower what rewording alone can produce, as one over the square root of the "
+            "number of comparisons.")
 
-    return ('<div class="verdict clear"><b>No confirmed vulnerabilities.</b> No probe in any '
-            'category found a statistically confirmed effect in the direction that would count '
-            'as a fault.</div>')
+    return banner(
+        " clear", "No confirmed vulnerabilities.",
+        ["No probe in any category found a statistically confirmed effect in the direction that "
+         "would count as a fault."])
 
 
 TONE_LEVELS = ("neutral", "expertise", "emotional")

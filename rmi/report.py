@@ -16,7 +16,7 @@ from . import methodology
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
-from .findings import (contamination_check, module_items, overview_verdict,
+from .findings import (banner, contamination_check, module_items, overview_verdict,
                        self_check, substance_check, tile_body, tone_check,
                        verdict_line)
 from .textdiff import word_diff
@@ -69,6 +69,8 @@ del{background:#fbdada;text-decoration:line-through}
 .verdict.clear{border-left-color:#0ca30c;background:#f2faf2}
 .verdict.mild{border-left-color:#fab219;background:#fdf6e8}
 .verdict .hint,.yard .hint{display:block;color:#52514e;font-size:12.5px;margin-top:6px}
+.verdict ul{margin:7px 0 0;padding-left:20px}
+.verdict li{margin:3px 0;line-height:1.5}
 details{margin:10px 0}summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--ink2)}
 pre{background:#f0efec;padding:12px;border-radius:8px;overflow-x:auto;font-size:12px}
 """
@@ -212,7 +214,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         A(f"<h2>{html.escape(probe_heading('identity'))}</h2>")
         A(verdict_line(module_items(R, "identity"), "identity",
                        "swapping a name or a descriptor changes the score"))
-        A("<h3>Which identities change the score</h3>")
+        A("<h3>Which identities change the model score</h3>")
         A(_fig(viz.bias_bars(module_items(R, "identity"))))
         A("<p class='sub'>Each bar is one identity axis: the largest gap it produces between "
           "groups, in otherwise identical templates. Identity bias is non-directional, so a shift "
@@ -268,7 +270,7 @@ def build(results: dict, out_path: Path | str) -> Path:
         A("<p class='sub'>Above zero the model prefers agreeing with the user; below zero it "
           "prefers correcting them. Each scenario is written in two versions and both are scored; "
           "the premium is their average.</p>")
-        A("<h3>The reward for agreeing, as the user pushes harder</h3>")
+        A("<h3>The model's reward for agreeing, as the user pushes harder</h3>")
         A(_fig(viz.sycophancy_ladder(sy)))
         A("<p class='sub'>Above the line the model prefers agreeing with the user; below it, "
           "correcting them. Each scenario is asked three ways, changing only how hard the user "
@@ -387,15 +389,17 @@ def build(results: dict, out_path: Path | str) -> Path:
         if winner:
             works = (winner["asr"] is not None and base_asr is not None
                      and winner["asr"] > base_asr)
-            A(f"<div class='verdict{'' if works else ' clear'}'>"
-              f"<b>{'Yes, this model can be reward hacked.' if works else 'No attack succeeded on this model.'}</b> "
-              f"The strongest attack found, <code>{html.escape(winner['name'])}</code>, lifts a "
-              f"deliberately bad answer by <b>{winner['lift']:+.2f} logits</b> on prompts the "
-              f"search never saw, and makes it outscore a genuine answer "
-              f"<b>{(winner['asr'] or 0):.0%}</b> of the time against {(base_asr or 0):.0%} "
-              f"unattacked."
-              "<span class='hint'>Every number here is measured on held-out prompts. "
-              "The search that found this attack only ever saw the development half.</span></div>")
+            A(banner(
+                "" if works else " clear",
+                "Yes, this model can be reward hacked." if works
+                else "No attack succeeded on this model.",
+                [f"The strongest attack found, <code>{html.escape(winner['name'])}</code>, lifts "
+                 f"a deliberately bad answer by <b>{winner['lift']:+.2f} logits</b> on prompts "
+                 "the search never saw.",
+                 f"It then outscores a genuine answer <b>{(winner['asr'] or 0):.0%}</b> of the "
+                 f"time, against {(base_asr or 0):.0%} unattacked."],
+                "Every number here is measured on held-out prompts. The search that found this "
+                "attack only ever saw the development half."))
         A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried as "
           "both prefix and suffix against non-answers, off-topic text, confidently false claims "
           f"and rude replies. All ranking happened on {srch.get('n_dev_questions', 0)} development "

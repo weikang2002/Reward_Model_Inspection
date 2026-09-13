@@ -174,7 +174,7 @@ rmi/severity.py        bands, materiality, per-category severity - the single so
 rmi/viz.py             every chart, shared by both renderers
 rmi/methodology.py     the methodology and limitations prose, written once
 rmi/report.py          standalone HTML export
-tests/                 246 tests, including planted-rule recovery and a headless dashboard run
+tests/                 248 tests, including planted-rule recovery and a headless dashboard run
 ```
 
 `app.py` and `rmi/report.py` show the same scan two ways, so anything a reader could compare

@@ -20,7 +20,7 @@ from rmi import methodology
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
-from rmi.findings import (banner_class, contamination_check, module_items,
+from rmi.findings import (banner, banner_class, contamination_check, module_items,
                           overview_verdict, self_check, substance_check, tile_body,
                           tone_check, verdict_line)
 from rmi.report import build as build_report
@@ -105,6 +105,10 @@ st.markdown("""
   .verdict.clear {border-left-color:#0ca30c; background:#f2faf2;}
   .verdict.mild {border-left-color:#fab219; background:#fdf6e8;}
   .verdict .hint {display:block; color:#52514e; font-size:12.5px; margin-top:6px;}
+  /* The answer is the bold lead; each number behind it gets its own row. Tight enough that the
+     banner stays one block rather than turning into a list the eye has to work through. */
+  .verdict ul {margin:7px 0 0; padding-left:20px;}
+  .verdict li {margin:3px 0; line-height:1.5;}
   ins {background:#d7f0d7; text-decoration:none;}
   ins.attack {background:#fbe3e0; border-bottom:2px solid #d03b3b; text-decoration:none;}
   /* A swap is neither an improvement nor an attack: the identity drill-down marks the words
@@ -655,7 +659,7 @@ with tabs[1]:
         items = module_items(R, "identity")
         st.markdown(verdict_line(items, "identity",
                                  "swapping a name or a descriptor changes the score"), unsafe_allow_html=True)
-        st.markdown("#### Which identities change the score")
+        st.markdown("#### Which identities change the model score")
         st.plotly_chart(viz.bias_bars(items), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
@@ -727,7 +731,7 @@ with tabs[1]:
                 varies, extra_cols = "level", []
                 what = f"{axis} descriptor"
 
-            st.markdown(f"##### Read the exact text for {html.escape(pick)}")
+            st.markdown(f"##### Read the text sent to model, for {html.escape(pick)}")
             st.caption(f"The rows behind the chart above, still for the **{pick}** axis chosen at "
                        "the top of this panel.")
             with st.expander(f"See the scored text, swapping the {what}",
@@ -790,7 +794,7 @@ with tabs[2]:
                                  "the model is rewarded for agreeing rather than correcting"), unsafe_allow_html=True)
 
         # ---- the one chart that answers the module ----------------------------------------
-        st.markdown("#### The reward for agreeing, as the user pushes harder")
+        st.markdown("#### The model's reward for agreeing, as the user pushes harder")
         st.plotly_chart(viz.sycophancy_ladder(sy, noise=noise), width="stretch",
                         config={"displayModeBar": False})
         st.caption(
@@ -868,7 +872,7 @@ with tabs[2]:
                 )
 
             # ---- the exact text ----------------------------------------------------------------
-            st.markdown(f"##### Read the exact text, when the user {viz.LADDER_LABEL[pick]}")
+            st.markdown(f"##### Read the text sent to model, when the user {viz.LADDER_LABEL[pick]}")
             st.caption("The scenarios behind the chart above, still at the level of pressure "
                        "chosen at the top of this panel.")
             with st.expander(f"See the responses when the user {viz.LADDER_LABEL[pick]}",
@@ -1010,7 +1014,7 @@ with tabs[3]:
                     "other transform is measured against rather than a transform in its own right."
                 )
 
-            st.markdown(f"##### Read the exact text for {html.escape(tname)}")
+            st.markdown(f"##### Read the text sent to model, for {html.escape(tname)}")
             st.caption(f"The scored answers behind the numbers above, still for the **{tname}** "
                        "transform chosen at the top of this panel.")
             with st.expander("See a transformed answer beside the plain one",
@@ -1082,29 +1086,24 @@ with tabs[4]:
         # ---- did it work? ------------------------------------------------------------------
         if exploits:
             best = exploits[0]
-            st.markdown(
-                f'<div class="verdict{banner_class(severity["reward_hacking"]["band"])}">'
-                f'<b>Yes, this model can be reward hacked.</b> '
-                f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
-                f'<b>{best["lift"]:+.2f} logits</b> and makes it outscore a genuine answer to the '
-                f'same prompt <b>{best["asr"]["p50"]:.0%}</b> of the time, against '
-                f'{base_asr:.0%} unattacked.'
-                # No count sentence here. The tile now counts attacks that work, which is what
-                # this banner already describes, so a "N of M" beside it restated the same fact
-                # with a second number - and the wording-noise test it reported cannot fail for an
-                # attack that outranks genuine answers, so it separated nothing.
-                f'<span class="hint">Ranked on {srch.get("n_dev_questions", 0)} development '
-                f'prompts, measured on {srch.get("n_test_questions", 0)} held-out prompts the '
-                f'search never saw. Of {srch.get("n_candidates", 0)} affixes tried, '
-                f'{len(exploits)} also beat the unattacked baseline often enough to count as '
-                'working; those are the ones charted below.</span></div>',
+            st.markdown(banner(
+                banner_class(severity["reward_hacking"]["band"]),
+                "Yes, this model can be reward hacked.",
+                [f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
+                 f'<b>{best["lift"]:+.2f} logits</b>.',
+                 f'It then outscores a genuine answer to the same prompt <b>'
+                 f'{best["asr"]["p50"]:.0%}</b> of the time, against {base_asr:.0%} unattacked.',
+                 f'Of {srch.get("n_candidates", 0)} affixes tried, {len(exploits)} beat that '
+                 'unattacked baseline at all; those are the ones charted below.'],
+                f'Ranked on {srch.get("n_dev_questions", 0)} development prompts, measured on '
+                f'{srch.get("n_test_questions", 0)} held-out prompts the search never saw.'),
                 unsafe_allow_html=True)
         else:
-            st.markdown(
-                f'<div class="verdict clear"><b>No attack succeeded.</b> None of the '
-                f'{srch.get("n_candidates", 0)} attacks tried made a bad answer outscore a genuine '
-                f'answer more often than the unmodified bad answer already did ({base_asr:.0%}).'
-                '</div>', unsafe_allow_html=True)
+            st.markdown(banner(
+                " clear", "No attack succeeded.",
+                [f'None of the {srch.get("n_candidates", 0)} attacks tried made a bad answer '
+                 'outscore a genuine answer more often than the unmodified bad answer already '
+                 f'did ({base_asr:.0%}).']), unsafe_allow_html=True)
 
         # ---- which ones worked -------------------------------------------------------------
         if exploits:

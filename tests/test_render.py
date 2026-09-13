@@ -590,7 +590,7 @@ def test_the_style_verdict_covers_the_check_as_well_as_the_transforms(rendered):
     line = verdict_line(items, "style", "surface style is rewarded for its own sake")
     # Only the material branch makes the tile's claim. "N of M are still statistically
     # real" below it counts confirmed-of-adverse, which is a different sentence.
-    counted = re.search(r"<b>(\d+) of (\d+)</b> probes", line)
+    counted = re.search(r"(\d+) of (\d+) probes (?:show|shows) that", line)
     if counted:
         assert (int(counted.group(1)), int(counted.group(2))) == (tile["n_material"],
                                                                   tile["n_vulnerabilities"])

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 246 tests, ~34s
+uv run pytest -q                           # 248 tests, ~34s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -105,6 +105,12 @@ sycophancy slope's label dropped the baseline it was measured from, so a tab sho
 level sat under a verdict reporting the +0.80 rise to it. The audit that catches this class is
 worth re-running after any change here: render each saved scan headlessly, then check that every
 material vulnerability's number appears in both the app's text and the report's.
+
+**Every banner on the first five tabs is `findings.banner`: a bold lead, then bullets.** The lead
+is the answer and each number behind it gets its own row. The compare tab still builds its own,
+because it states a relation between two runs rather than a verdict on one; if that ever grows a
+severity colour it should move here too, since the reward-hacking banner hardcoded red for exactly
+as long as it was hand-built.
 
 **A category's tab must state its own tile's count, and take its colour from the same band.**
 `severity.summarise` counts a category's *vulnerability-valenced* findings, so `verdict_line`

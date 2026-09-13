@@ -41,7 +41,7 @@ def test_the_dashboard_renders_a_saved_scan_without_error(dashboard):
     _, at = dashboard
     assert not at.exception, [e.value for e in at.exception]
     # It reached the tabs rather than stopping on the landing page.
-    assert any("Which identities change the score" in m.value for m in at.markdown)
+    assert any("Which identities change the model score" in m.value for m in at.markdown)
 
 
 def test_the_export_button_is_live_on_the_first_load(dashboard):
@@ -76,7 +76,7 @@ def test_every_tab_verdict_states_its_own_tile_s_count(dashboard, category, phra
     tile = sv.summarise(scan["findings"], category)
     # Only the material branch makes the tile's claim. "N of M are still statistically
     # real" below it counts confirmed-of-adverse, which is a different sentence.
-    counted = re.search(r"<b>(\d+) of (\d+)</b> probes", line)
+    counted = re.search(r"(\d+) of (\d+) probes (?:show|shows) that", line)
     if counted:
         assert (int(counted.group(1)), int(counted.group(2))) == (tile["n_material"],
                                                                   tile["n_vulnerabilities"])
@@ -90,5 +90,6 @@ def test_a_drill_down_names_the_selection_it_follows(dashboard):
     heading it read as an independent section and nothing said which choice it was showing."""
     _, at = dashboard
     headings = [m.value for m in at.markdown if m.value.startswith("#####")]
-    assert any(h.startswith("##### Read the exact text for ") for h in headings), headings
+    assert any(h.startswith("##### Read the text sent to model, for ")
+               for h in headings), headings
     assert any("when the user" in h for h in headings), headings
