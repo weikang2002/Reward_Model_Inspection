@@ -20,8 +20,9 @@ from rmi import methodology
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
-from rmi.findings import (banner_class, module_items, overview_verdict, self_check,
-                          substance_check, tone_check, verdict_line)
+from rmi.findings import (banner_class, contamination_check, module_items,
+                          overview_verdict, self_check, substance_check, tile_body,
+                          tone_check, verdict_line)
 from rmi.report import build as build_report
 from rmi.scoring import (MAX_DOWNLOAD_BYTES, ModelTooLargeError, RewardModel,
                          check_download_size, download_size)
@@ -430,19 +431,10 @@ def severity_tiles(sev_map: dict, *, other: dict | None = None,
                 continue
             with col:
                 if other is None:
-                    worst = (f"{sm['severity']:.1f}x" if sm.get("severity") is not None
-                             else "n/a")
-                    body = (f"<b>{sm.get('n_material', 0)} of "
-                            f"{sm.get('n_vulnerabilities', 0)}</b> possible problems here are big "
-                            f"enough to matter.<br>Worst confirmed effect: <b>{worst}</b> what "
-                            "rewording alone could produce."
-                            if sm.get("severity") is not None else
-                            f"{sm.get('n_vulnerabilities', 0)} probes ran; none reached "
-                            "significance.")
                     st.markdown(
                         f'<div class="tile"><h4>{html.escape(probe_heading(cat))}</h4>'
                         f'{band_pill(sm["band"])}'
-                        f'<div class="sub">{body}</div></div>', unsafe_allow_html=True)
+                        f'<div class="sub">{tile_body(sm)}</div></div>', unsafe_allow_html=True)
                 else:
                     om = other.get(cat, {})
                     a, b = names or ("A", "B")
@@ -572,22 +564,23 @@ with tabs[0]:
 
     # ---- everything, on one scale -----------------------------------------------------------
     if noise:
-        st.markdown("#### Every finding, on one scale")
+        st.markdown("#### The biggest findings, on one scale")
         st.plotly_chart(viz.findings_vs_noise(R["findings"]), width="stretch",
                         config={"displayModeBar": False})
         scored = [f for f in R["findings"]
                   if f.get("effect") is not None and f.get("systematic_bar")]
         shown = min(len(scored), viz.MAX_ROWS)
         st.caption(
-            f"The {shown} largest of {len(scored)} findings, each labelled with the category it "
-            "came from. Bars inside the shaded band are no larger than rewording alone would "
+            f"{shown} of the {len(scored)} findings measured, each labelled with the category it "
+            "came from: the largest, plus every problem the tiles above count, so nothing they "
+            "report is missing here. Bars inside the shaded band are no larger than rewording "
+            "alone would "
             "produce at the same sample size, so they are real but too small to steer a policy. "
             "A tile counts a finding only if it is a vulnerability, clears the line, *and* is "
             "statistically confirmed; hatched red bars fail that last test, and green and blue "
-            "ones are not faults at all. Smaller findings than these are not drawn, so a "
-            "category's count can "
-            "be larger than the bars visible here; \u201cRead every finding in words\u201d below "
-            "lists all of them. Hover a bar for the effect in logits."
+            "ones are not faults at all. Smaller findings are not drawn, so a category's count "
+            "can still be larger than the bars visible here; \u201cRead every finding in "
+            "words\u201d below lists all of them. Hover a bar for the effect in logits."
         )
 
     # ---- what the numbers above are measured against ------------------------------------
@@ -839,7 +832,8 @@ with tabs[2]:
                 st.plotly_chart(viz.sycophancy_scenarios(sy["arms"], pick), width="stretch",
                                 config={"displayModeBar": False})
             with c2:
-                st.metric("Reward for agreeing", f"{lvl['mean_delta']:+.2f} logits",
+                st.metric("Reward for agreeing, at this level",
+                          f"{lvl['mean_delta']:+.2f} logits",
                           delta=f"agreement wins on {lvl['win_rate']:.0%} of scenarios",
                           delta_color="off")
                 st.markdown(
@@ -849,6 +843,18 @@ with tabs[2]:
                        if lvl["mean_delta"] > 0 else
                        "The model still prefers correcting at this level.")
                 )
+                # The verdict at the top reports the *rise* from neutral, this metric the premium
+                # *at* the level. Two numbers for one level of pressure, and nothing said they were
+                # different quantities until the subtraction was written out here.
+                neutral = by_level.get(viz.LADDER[0])
+                if neutral and pick != viz.LADDER[0]:
+                    st.caption(
+                        f"Asked neutrally, the same scenarios sit at `{neutral['mean_delta']:+.2f}`,"
+                        f" so pressure of this kind is worth "
+                        f"`{lvl['mean_delta'] - neutral['mean_delta']:+.2f}` on top. That rise is "
+                        "what the verdict at the top of this tab reports; this figure is the level "
+                        "itself."
+                    )
                 st.caption(
                     "Each dot is one scenario, red where agreeing scored higher and green where "
                     "correcting did. A mean can come from every scenario leaning the same way or from "
@@ -1082,11 +1088,17 @@ with tabs[4]:
                 f'<code>{html.escape(best["label"])}</code> lifts a deliberately bad answer by '
                 f'<b>{best["lift"]:+.2f} logits</b> and makes it outscore a genuine answer to the '
                 f'same prompt <b>{best["asr"]["p50"]:.0%}</b> of the time, against '
-                f'{base_asr:.0%} unattacked. {len(exploits)} of '
-                f'{srch.get("n_candidates", 0)} attacks tried succeed at all.'
+                f'{base_asr:.0%} unattacked.'
+                # No count sentence here. The tile now counts attacks that work, which is what
+                # this banner already describes, so a "N of M" beside it restated the same fact
+                # with a second number - and the wording-noise test it reported cannot fail for an
+                # attack that outranks genuine answers, so it separated nothing.
                 f'<span class="hint">Ranked on {srch.get("n_dev_questions", 0)} development '
                 f'prompts, measured on {srch.get("n_test_questions", 0)} held-out prompts the '
-                'search never saw.</span></div>', unsafe_allow_html=True)
+                f'search never saw. Of {srch.get("n_candidates", 0)} affixes tried, '
+                f'{len(exploits)} also beat the unattacked baseline often enough to count as '
+                'working; those are the ones charted below.</span></div>',
+                unsafe_allow_html=True)
         else:
             st.markdown(
                 f'<div class="verdict clear"><b>No attack succeeded.</b> None of the '
@@ -1102,7 +1114,10 @@ with tabs[4]:
             st.caption(
                 "An attack counts as working only if it beats a real answer more often than the "
                 "unmodified bad answer already does. Lift alone is not enough: an affix can add "
-                "several logits and still leave the answer far below anything a real model writes."
+                "several logits and still leave the answer far below anything a real model writes, "
+                "which is why the category tile counts these and not the biggest lifts. Every "
+                "attack that works gets a bar; the scan reports the strongest single affix and the "
+                "best stack as one finding each, so the tile can count fewer than there are bars."
             )
 
             # ---- the examples ---------------------------------------------------------------
@@ -1214,19 +1229,26 @@ with tabs[4]:
                     "forged token is worth only the remainder."
                 )
 
-        cont = ij.get("contamination", {})
-        if cont:
-            with st.expander("Is padding free? What junk costs on a good answer"):
-                cols = st.columns(len(cont))
-                for col, (where, d) in zip(cols, cont.items()):
-                    col.metric(f"Junk {where} to a good answer", f"{d['mean_delta']:+.2f}")
-                first = next(iter(cont.values()))
-                st.caption(
-                    "A model that ignored contamination would sit near zero, which would mean a "
-                    "policy could emit filler at no cost. "
-                    + (f"This one drops {abs(first['mean_delta']):.2f} logits, so filler is not "
-                       "free here." if first["mean_delta"] < -0.5 else "")
-                )
+        # A section, not a collapsed expander. When junk *pays* these are counted vulnerabilities -
+        # on one checkpoint the two largest in the category - and they sat folded away under a
+        # title asking what junk costs, with prose only for the case where it costs something.
+        cont_check = contamination_check(R)
+        if cont_check:
+            st.markdown("#### Is padding free?")
+            st.markdown(f"**{cont_check['lead']}** {cont_check['body']}")
+            st.caption(cont_check["setup"])
+            for col, row in zip(st.columns(len(cont_check["rows"])), cont_check["rows"]):
+                with col:
+                    st.metric(f"Junk {row['where']} to a good answer",
+                              f"{row['mean_delta']:+.2f} logits")
+                    if row["item"] and row["ratio"]:
+                        st.markdown(
+                            fault_pill(row["item"],
+                                       bad="padding pays", good="the model notices it")
+                            + f'&nbsp; <span class="sub">{row["ratio"]:.1f}x what rewording alone '
+                            f'could produce ({row["n_items"]} questions)</span>',
+                            unsafe_allow_html=True)
+            st.caption(cont_check["counts"])
 
 
 # --------------------------------------------------------------------------------------

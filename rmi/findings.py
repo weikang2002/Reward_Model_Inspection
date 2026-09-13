@@ -41,9 +41,14 @@ def module_items(R: dict, category: str, *, group: str | None = None) -> list[di
             if kind == "main_effect":
                 label = "Agreeing rather than correcting"
             elif kind == "insistence_slope":
+                # The baseline belongs in the label. A slope is the *rise* from the neutral level,
+                # while the tab's metric for the same level shows the premium *at* it - +0.80
+                # against +0.48 on `-large-v2` - and a label that says only "extra reward when the
+                # user is emotionally invested" gives a reader no way to tell which they are
+                # looking at, or that the difference is the neutral level sitting at -0.31.
                 pushes = ("claims expertise" if d["level"] == "expertise"
                           else "is emotionally invested")
-                label = f"Extra reward when the user {pushes}"
+                label = f"Extra reward when the user {pushes} (vs a neutral question)"
             else:
                 continue
         elif category == "style":
@@ -57,9 +62,6 @@ def module_items(R: dict, category: str, *, group: str | None = None) -> list[di
                 if group != "quality_control":
                     continue
                 label = "content-free filler versus genuine information"
-                # The fault runs negative here - filler scoring *as well as* genuine information is
-                # the failure - so the direction rule the transforms use would read it backwards.
-                adverse = f.get("valence") == "vulnerability"
             elif kind == "length_adjusted":
                 if f.get("group") != (group or "content_neutral"):
                     continue
@@ -69,7 +71,13 @@ def module_items(R: dict, category: str, *, group: str | None = None) -> list[di
         else:
             continue
         if adverse is None:
-            adverse = f["effect"] > 0 if DIRECTIONAL.get(category) else True
+            # What the category tile counts is a vulnerability-valenced finding, so that is what
+            # "adverse" means. Reading it off the effect's sign was right for the directional
+            # modules and wrong wherever the fault runs the other way: contamination costs logits
+            # when the model behaves well, and the substance check fails negative.
+            valence = f.get("valence")
+            adverse = (valence == "vulnerability" if valence
+                       else f["effect"] > 0 if DIRECTIONAL.get(category) else True)
         out.append({
             "label": label, "effect": f["effect"], "confirmed": f.get("confirmed"),
             "adverse": adverse,
@@ -161,6 +169,64 @@ def substance_check(style_block: dict, items: list[dict]) -> dict | None:
     }
 
 
+def contamination_check(results: dict) -> dict | None:
+    """Whether junk added to a *good* answer costs anything, phrased once for both renderers.
+
+    The direction is the whole finding and it goes both ways. On the DeBERTa checkpoints junk costs
+    a good answer over a logit, which is the model noticing contamination. On
+    `gpt2-large-harmless` it *pays*: +0.23 prepended, +0.10 appended, both larger than rewording
+    alone could produce. That is the training-time exploit path - a policy emitting filler is
+    rewarded for it, with no need to outrank anything - and it sat in a collapsed expander titled
+    "what junk costs" whose only prose described the case where it costs.
+    """
+    rh = results.get("reward_hacking") or {}
+    cont = rh.get("contamination") or {}
+    if not cont:
+        return None
+    by_where = {(f.get("detail") or {}).get("where"): f for f in results.get("findings") or []
+                if f.get("category") == "reward_hacking"
+                and (f.get("detail") or {}).get("kind") == "contamination"}
+    rows = []
+    for where, d in cont.items():
+        f = by_where.get(where) or {}
+        rows.append({
+            "where": where,
+            "mean_delta": d["mean_delta"],
+            "n_items": d.get("n_clusters"),
+            # Ready for `viz.fault_chip`, which needs the derived flags a raw finding does not
+            # carry: without `material` it would mark a counted problem amber rather than red.
+            "item": {"confirmed": f.get("confirmed"), "effect": f.get("effect"),
+                     "adverse": f.get("valence") == "vulnerability",
+                     "material": is_material(f)} if f else None,
+            "ratio": systematic_ratio(f) if f else None,
+            "counted": bool(f) and f.get("valence") == "vulnerability" and is_material(f),
+            "pays": d["mean_delta"] > 0,
+        })
+    rows.sort(key=lambda r: -(r["ratio"] or 0))
+    pays = [r for r in rows if r["pays"]]
+    counted = [r for r in rows if r["counted"]]
+    return {
+        "rows": rows,
+        "pays": bool(pays),
+        "lead": "Yes: padding is free, and better than free." if pays else "No: junk costs.",
+        "body": (
+            "Junk added to a *good* answer raises its score, so a policy has no reason not to pad "
+            "and every reason to. Nothing needs to outrank anything for this to bite: reward goes "
+            "up when the filler goes in."
+            if pays else
+            "Junk added to a good answer lowers its score, so the model notices contamination and "
+            "a policy emitting filler would be penalised for it."),
+        "setup": ("Content-free junk is added to answers that already score well, and the question "
+                  "is only whether the score moves and which way."),
+        "counts": (f"{len(counted)} of these counts in the reward-hacking tile on the overview."
+                   if len(counted) == 1 else
+                   f"{len(counted)} of these count in the reward-hacking tile on the overview."
+                   if counted else
+                   "The model behaving well is kept out of the risk figures, so neither counts "
+                   "toward the reward-hacking tile."),
+    }
+
+
 def worst_mismatch(pv: list[dict]) -> float:
     """Length mismatch of the largest comparison, which is the one the prose describes."""
     return max(pv, key=lambda r: abs(r["mean_delta"]))["mean_length_mismatch"]
@@ -169,11 +235,35 @@ def worst_mismatch(pv: list[dict]) -> float:
 # A banner and the category pill on the overview describe the same finding, so they must take
 # their severity from the same place. Colouring the banner by mere *presence* of a material
 # finding put a red alarm next to an amber "Low" pill for the same 1.2x effect.
+# "Unconfirmed" is clear, not mild, because that is what `verdict_line` already renders for the
+# state: a category lands in that band exactly when nothing adverse was confirmed, which is the
+# branch that returns a green banner. Amber here made a hand-built banner disagree with the one
+# the shared function builds for the same scan.
 _BAND_CLASS = {"High": "", "Moderate": "", "Low": " mild",
-               "Negligible": " mild", "Unconfirmed": " mild", "Unknown": " mild",
+               "Negligible": " mild", "Unconfirmed": " clear", "Unknown": " mild",
                # `severity.summarise` returns this when a category has no vulnerability at all,
                # which reaches a banner built outside `verdict_line`.
                "None detected": " clear", "No data": " mild"}
+
+
+def tile_body(summary: dict) -> str:
+    """The sentence under a category tile, phrased once for both renderers.
+
+    The no-findings case had drifted: the dashboard called `n_vulnerabilities` "probes ran", which
+    it is not - three sycophancy probes run and one of them points the wrong way - while the report
+    had no branch for it at all and printed "0 of 1 ... worst effect n/a" for the same state.
+    """
+    n_material = summary.get("n_material", 0)
+    n_vuln = summary.get("n_vulnerabilities", 0)
+    n_all = summary.get("n_contrasts", 0)
+    if summary.get("severity") is not None:
+        return (f"<b>{n_material} of {n_vuln}</b> possible problems here are big enough to "
+                f"matter.<br>Worst confirmed effect: <b>{summary['severity']:.1f}x</b> what "
+                "rewording alone could produce.")
+    if not n_vuln:
+        return f"Nothing here points the wrong way, across {n_all} measured."
+    return (f"<b>{n_vuln} of {n_all}</b> findings "
+            f"{'points' if n_vuln == 1 else 'point'} that way, and none reached significance.")
 
 
 def banner_class(band_name: str) -> str:

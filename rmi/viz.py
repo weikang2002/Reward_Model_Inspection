@@ -10,12 +10,14 @@ Status colours always ship alongside their band name as text, so identity is nev
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 import numpy as np
 import plotly.graph_objects as go
 
 from .probes.sycophancy import INSISTENCE_PHRASE
+from .severity import is_material
 
 # Categorical slots, in the fixed validated order. Never cycled.
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -71,7 +73,10 @@ _SUBSET_LABEL = {"id": "in-distribution", "ood": "out-of-distribution"}
 # Fixed order, so the legend never reshuffles between models or reruns.
 VALENCE_LEGEND = [
     ("vulnerability", "a vulnerability"),
-    ("informational", "a preference that may be legitimate"),
+    # Neutral wording on purpose: "informational" now covers a quality-bearing style transform, a
+    # control contrast that explains an attack, and an attack whose success rate never beat the
+    # unattacked baseline. "A preference that may be legitimate" described only the first.
+    ("informational", "real, but not a fault on its own"),
     ("healthy", "the model behaving correctly"),
 ]
 
@@ -98,7 +103,11 @@ def _describe(category: str, detail: dict, title: str) -> str:
         if kind == "best_affix":
             return f"best single affix: {detail.get('affix_id', 'unknown')}"
         if kind == "beam_search":
-            return "best stacked attack"
+            # Files written before the stack was recorded in the detail still carry it in the
+            # title, which is where the label used to be unable to reach it.
+            stack = detail.get("stack") or re.findall(r"\(([^)]*)\)", title)[:1]
+            named = " + ".join(stack) if isinstance(stack, list) and stack else ""
+            return f"best stacked attack: {named}" if named else "best stacked attack"
         if kind == "contamination":
             return f"junk {detail.get('where', 'added')} to a good answer"
         if kind == "key_contrast":
@@ -158,6 +167,38 @@ def finding_labels(findings: list[dict]) -> list[str]:
 MAX_ROWS = 16
 
 
+def _largest_plus_every_counted_problem(scored: list[dict]) -> list[dict]:
+    """The largest findings, with every problem a category tile counts guaranteed a row.
+
+    Ranking on size alone let counted problems fall off the bottom. On `-base` every identity
+    finding did, so a tile reading "1 of 6 · Low · 1.5x" sat above a chart with no identity bar at
+    all; on `-large-v2` identity has two material findings and only the larger survived, so the tab
+    showed two red bars and the overview one. The rule is the tile's own: a vulnerability that
+    `severity.is_material` counts must be findable here.
+
+    If more problems are counted than there are rows, the largest of them take the chart - they are
+    the ones a reader needs first, and the caption already points at the full list.
+    """
+    ratio = lambda f: abs(f["effect"]) / f["systematic_bar"]  # noqa: E731
+    ranked = sorted(scored, key=ratio)
+    if len(ranked) <= MAX_ROWS:
+        return ranked
+    keep = list(ranked[-MAX_ROWS:])
+    must = sorted((f for f in scored
+                   if f.get("valence") == "vulnerability" and is_material(f)),
+                  key=ratio, reverse=True)[:MAX_ROWS]
+    must_ids = {id(f) for f in must}
+    for f in must:
+        if any(k is f for k in keep):
+            continue
+        # `keep` runs smallest first, so this drops the smallest row that is not itself counted.
+        drop = next((k for k in keep if id(k) not in must_ids), None)
+        if drop is None:
+            break
+        keep = [k for k in keep if k is not drop] + [f]
+    return sorted(keep, key=ratio)
+
+
 def _unconfirmed_fault(f: dict) -> bool:
     """A vulnerability that did not reach significance: real-looking, but counting toward nothing.
 
@@ -200,7 +241,7 @@ def findings_vs_noise(findings: list[dict], *, height=None) -> go.Figure:
     """
     sel = [f for f in findings
            if f.get("effect") is not None and f.get("systematic_bar")]
-    sel = sorted(sel, key=lambda f: abs(f["effect"]) / f["systematic_bar"])[-MAX_ROWS:]
+    sel = _largest_plus_every_counted_problem(sel)
     labels = finding_labels(sel)
     vals = [abs(f["effect"]) / f["systematic_bar"] for f in sel]
     fig = go.Figure()
@@ -800,6 +841,11 @@ def exploit_ranking(exploits: list[dict], baseline_asr: float) -> go.Figure:
     Ranked by success rate rather than by lift. Lift measures how far an affix moved the score;
     success measures whether that was far enough to matter, and the two disagree because the
     biggest lifts come from the answers that started lowest.
+
+    One colour for every bar. It used to be orange for a stacked attack and red for a single affix,
+    which reads as a severity ramp - the same two colours the Moderate and High band pills use - so
+    the strongest attack on the chart looked like the milder one. Every bar here is an attack that
+    works; how badly is the bar's length, and which kind it is is in the label and the hover.
     """
     rows = sorted(exploits, key=lambda e: (e["asr"].get("p50") or 0))
     labels = [(e["label"][:44] + "…") if len(e["label"]) > 44 else e["label"] for e in rows]
@@ -813,8 +859,7 @@ def exploit_ranking(exploits: list[dict], baseline_asr: float) -> go.Figure:
                            font=dict(size=11, color=INK2))
     fig.add_trace(go.Bar(
         y=labels, x=vals, orientation="h", width=0.6, showlegend=False,
-        marker=dict(color=[SERIES[1] if e["kind"] == "stacked attack" else STATUS["critical"]
-                           for e in rows]),
+        marker=dict(color=STATUS["critical"]),
         text=[f"{v:.0%}" for v in vals], textposition="outside",
         textfont=dict(size=12, color=INK),
         customdata=[[e["kind"], e["lift"], len(e["examples"])] for e in rows],

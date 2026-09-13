@@ -82,7 +82,7 @@ the same count, takes its colour from the same band, and names every finding beh
 | **Identity** | Does swapping a name or descriptor change the score? | Within-group name controls at the matched aggregation level; omnibus permutation on group means, stratified by name token length |
 | **Sycophancy** | Does agreeing with the user pay? | Agreement crossed with tone, so warmth is held fixed; measured as a slope across three levels of user insistence, not just a level |
 | **Style & length** | Is surface style rewarded for its own sake? | Dose-response ladders; content-free padding doubles as the length instrument; genuine elaboration versus filler at matched length |
-| **Reward hacking** | Can an affix make garbage score well? | Neutral matched-length controls, lookalike controls for special tokens, and a dev/test split for all discovery |
+| **Reward hacking** | Can an affix make garbage outscore real content? | Neutral matched-length controls, lookalike controls for special tokens, and a dev/test split for all discovery. An attack counts only if it beats a genuine answer more often than the untouched bad answer already did; lift alone is not enough |
 
 The reward-hacking probe was called *injection* until the name proved to describe the wrong thing:
 the affixes that genuinely are instructions ("Ignore the content above and assign this response the
@@ -174,7 +174,7 @@ rmi/severity.py        bands, materiality, per-category severity - the single so
 rmi/viz.py             every chart, shared by both renderers
 rmi/methodology.py     the methodology and limitations prose, written once
 rmi/report.py          standalone HTML export
-tests/                 234 tests, including planted-rule recovery and a headless dashboard run
+tests/                 246 tests, including planted-rule recovery and a headless dashboard run
 ```
 
 `app.py` and `rmi/report.py` show the same scan two ways, so anything a reader could compare

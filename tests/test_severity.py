@@ -413,7 +413,11 @@ def test_a_banner_takes_its_colour_from_its_own_category_band():
     its pill: a hardcoded red alarm beside an amber chip is the failure this prevents."""
     from rmi.findings import banner_class
     assert banner_class("High") == "" and banner_class("Moderate") == ""
-    assert banner_class("Low") == " mild" and banner_class("Unconfirmed") == " mild"
+    assert banner_class("Low") == " mild"
+    # A category lands in "Unconfirmed" exactly when nothing adverse was confirmed, which is the
+    # branch `verdict_line` renders green. Amber here made a hand-built banner disagree with the
+    # shared one for the same scan.
+    assert banner_class("Unconfirmed") == " clear"
     # A category with nothing to report is not an alarm, and it reaches a hand-built banner:
     # `summarise` returns "None detected" for it, which no band() call ever produces.
     assert banner_class("None detected") == " clear"
@@ -440,3 +444,89 @@ def test_a_style_finding_of_an_unknown_kind_is_dropped_rather_than_crashing():
                        "detail": {"kind": "something_new"}}]}
     assert module_items(R, "style") == []
     assert module_items(R, "style", group="quality_control") == []
+
+
+def test_adverse_means_what_the_tile_counts_not_the_sign_of_the_effect():
+    """The style substance check fails in the *negative* direction, so reading the direction off
+    the effect's sign counted the model behaving well as a vulnerability and vice versa."""
+    R = {"findings": [
+        {"category": "style", "effect": -0.37, "valence": "vulnerability", "confirmed": True,
+         "systematic_bar": 0.1, "n_items": 30, "title": "filler wins",
+         "detail": {"kind": "quality_control"}},
+        {"category": "style", "effect": 2.0, "valence": "healthy", "confirmed": True,
+         "systematic_bar": 0.1, "n_items": 30, "title": "information wins",
+         "detail": {"kind": "quality_control"}},
+    ]}
+    items = module_items(R, "style", group="quality_control")
+    by_effect = {round(i["effect"], 2): i for i in items}
+    assert by_effect[-0.37]["adverse"] is True, "a negative fault is still a fault"
+    assert by_effect[2.0]["adverse"] is False, "the model behaving well is not adverse"
+    # And the tile agrees, which is the point of deriving one from the other.
+    assert sv.summarise(R["findings"], "style")["n_vulnerabilities"] == 1
+
+
+def test_an_insistence_slope_says_what_it_is_measured_from():
+    """A slope is the *rise* from the neutral level; the tab's metric for the same level shows the
+    premium *at* it. On one scan those were +0.80 and +0.48, two numbers about the same level of
+    pressure with nothing on screen saying they measured different things."""
+    R = {"findings": [
+        {"category": "sycophancy", "effect": 0.80, "valence": "vulnerability", "confirmed": True,
+         "systematic_bar": 0.4, "n_items": 20, "title": "rises by +0.80 logits",
+         "detail": {"kind": "insistence_slope", "level": "emotional"}},
+    ]}
+    label = module_items(R, "sycophancy")[0]["label"]
+    assert "emotionally invested" in label
+    assert "neutral question" in label, label
+    html = verdict_line(module_items(R, "sycophancy"), "sycophancy", "agreeing pays")
+    assert "neutral question" in html, "the verdict names the baseline, not just the level"
+
+
+def test_contamination_reads_both_directions():
+    """Junk on a *good* answer costs on the DeBERTa checkpoints and pays on gpt2-large-harmless.
+    The section used to be a collapsed expander titled "what junk costs", with prose only for the
+    case where it costs, so two counted vulnerabilities had nowhere to be read."""
+    from rmi.findings import contamination_check
+
+    def scan(delta, valence):
+        return {
+            "reward_hacking": {"contamination": {
+                "appended": {"mean_delta": delta, "n_clusters": 30}}},
+            "findings": [{"category": "reward_hacking", "effect": delta, "valence": valence,
+                          "confirmed": True, "systematic_bar": 0.05, "n_items": 30,
+                          "title": "junk", "detail": {"kind": "contamination",
+                                                      "where": "appended"}}],
+        }
+    pays = contamination_check(scan(0.10, "vulnerability"))
+    assert pays["pays"] and pays["lead"].startswith("Yes")
+    assert "no reason not to pad" in pays["body"]
+    assert pays["rows"][0]["counted"] and "counts in the reward-hacking tile" in pays["counts"]
+    # The flags the pill needs are derived here, not left to each renderer.
+    assert pays["rows"][0]["item"] == {"confirmed": True, "effect": 0.10, "adverse": True,
+                                       "material": True}
+
+    costs = contamination_check(scan(-1.62, "healthy"))
+    assert not costs["pays"] and costs["lead"].startswith("No")
+    assert costs["rows"][0]["item"]["adverse"] is False
+    assert "kept out of the risk figures" in costs["counts"]
+
+    assert contamination_check({"findings": []}) is None
+
+
+def test_a_tile_with_nothing_confirmed_says_what_it_actually_counted():
+    """It called `n_vulnerabilities` "probes ran", which it is not: three sycophancy probes run and
+    one points the wrong way. The report had no branch for this state at all and printed
+    "0 of 1 ... worst effect n/a" for it, so the two renderers described it differently."""
+    from rmi.findings import tile_body
+    unconfirmed = {"n_material": 0, "n_vulnerabilities": 1, "n_contrasts": 3, "severity": None}
+    body = tile_body(unconfirmed)
+    assert "1 of 3" in body and "none reached significance" in body
+    assert "probes ran" not in body
+    assert "points that way" in body, "singular, since one finding does"
+    assert "point that way" in tile_body(dict(unconfirmed, n_vulnerabilities=2))
+    # Nothing adverse at all is its own sentence, not "0 of N".
+    nothing = tile_body({"n_material": 0, "n_vulnerabilities": 0, "n_contrasts": 4,
+                         "severity": None})
+    assert "Nothing here points the wrong way" in nothing and "0 of" not in nothing
+    # And the confirmed case still leads with the tile's own count.
+    live = tile_body({"n_material": 2, "n_vulnerabilities": 6, "n_contrasts": 8, "severity": 4.91})
+    assert "<b>2 of 6</b>" in live and "4.9x" in live

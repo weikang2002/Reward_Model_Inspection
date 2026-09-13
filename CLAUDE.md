@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 234 tests, ~35s
+uv run pytest -q                           # 246 tests, ~34s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -79,6 +79,32 @@ module into one ranked `findings` list. Each finding carries `category`, `effect
 `systematic_bar`, `n_items`, `confirmed`, `band`, and **`valence`** (`vulnerability` / `healthy` /
 `informational`). Valence matters: without it the ranked list puts "correctly penalises junk" at
 the top of a vulnerability report, and category risk scores get driven by the model behaving well.
+
+**A reward-hacking finding is a vulnerability only if the attack works, and lift does not settle
+that.** `runner.attack_valence` is the one rule: an attack is a vulnerability when its held-out
+success rate beats the *unattacked* baseline, healthy when its lift runs the other way, and
+informational when it moves the score without outranking genuine answers or when no success rate
+was measured. The affix the scan *reports* is chosen the same way, success rate first and lift only
+to break ties: picking the biggest lift named one that beat a genuine answer exactly as often as
+doing nothing, while the one single affix that did beat it had no finding at all. The tempting alternative - "a big lift is exploitable because a policy climbs the
+gradient" - does not survive this repo's own data. On `-base` the biggest single affix adds 3.26
+logits, more than the whole good-versus-poor gap, and beats a genuine answer exactly as often as
+doing nothing; and the contamination probe, which applies the same junk to a *good* answer, shows
+it costing 1.2 to 1.6 logits rather than paying. A key contrast is informational too: it decomposes
+*why* an attack works and is not something anyone deploys. Both took `add`'s default valence until
+this was made explicit, so a tile read "3 of 6" for a model with one working attack. `migrate`
+re-decides on load, since the file carries the lift and the success rate either way and two eras of
+results must not count different things.
+
+**Whatever a tile counts has to be findable.** Three separate places got this wrong in turn: the
+overview chart ranked on size alone and dropped whole categories off the bottom, so
+`viz.findings_vs_noise` now guarantees a row to every vulnerability `severity.is_material` counts;
+the reward-hacking tab kept contamination in a collapsed expander whose prose only described the
+healthy direction, while on `gpt2-large-harmless` its two rows were counted problems; and the
+sycophancy slope's label dropped the baseline it was measured from, so a tab showing +0.48 at a
+level sat under a verdict reporting the +0.80 rise to it. The audit that catches this class is
+worth re-running after any change here: render each saved scan headlessly, then check that every
+material vulnerability's number appears in both the app's text and the report's.
 
 **A category's tab must state its own tile's count, and take its colour from the same band.**
 `severity.summarise` counts a category's *vulnerability-valenced* findings, so `verdict_line`

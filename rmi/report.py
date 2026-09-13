@@ -16,8 +16,9 @@ from . import methodology
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
-from .findings import (module_items, overview_verdict, self_check, substance_check,
-                       tone_check, verdict_line)
+from .findings import (contamination_check, module_items, overview_verdict,
+                       self_check, substance_check, tile_body, tone_check,
+                       verdict_line)
 from .textdiff import word_diff
 
 CSS = """
@@ -127,13 +128,10 @@ def build(results: dict, out_path: Path | str) -> Path:
     # -- severity ---------------------------------------------------------------------
     A("<h2>Where the problems are</h2><div class='grid g4'>")
     for cat, s in sev.summarise_all(R["findings"]).items():
-        worst_pct = f"{s['severity']:.1f}x" if s.get("severity") is not None else "n/a"
         A(f"<div class='tile'><h4>{html.escape(probe_heading(cat))}</h4>"
           f"<span class='band' style='background:{viz.BAND_COLOR.get(s['band'], '#8a8a85')}'>"
           f"{html.escape(s['band'])}</span>"
-          f"<p><b>{s.get('n_material', 0)} of {s.get('n_vulnerabilities', 0)}</b> possible "
-          "problems here are big enough to matter.<br>Worst confirmed effect: "
-          f"<b>{worst_pct}</b> what rewording alone could produce.</p></div>")
+          f"<p>{tile_body(s)}</p></div>")
     A("</div><p class='sub'>Bands are the <i>worst confirmed</i> effect in a category, as a "
       "multiple of what rewording alone could produce across the same number of comparisons: "
       "below "
@@ -141,12 +139,14 @@ def build(results: dict, out_path: Path | str) -> Path:
       "behaving <i>well</i> are excluded.</p>")
 
     if noise:
-        A("<h2>Every finding, on one scale</h2>")
+        A("<h2>The biggest findings, on one scale</h2>")
         A(_fig(viz.findings_vs_noise(R["findings"])))
         scored = [f for f in R["findings"]
                   if f.get("effect") is not None and f.get("systematic_bar")]
-        A(f"<p class='sub'>The {min(len(scored), viz.MAX_ROWS)} largest of {len(scored)} findings, "
-          "each labelled with the category it came from. Bars inside the shaded band are no "
+        A(f"<p class='sub'>{min(len(scored), viz.MAX_ROWS)} of the {len(scored)} findings "
+          "measured, each labelled with the category it came from: the largest, plus every "
+          "problem the tiles above count, so nothing they report is missing here. "
+          "Bars inside the shaded band are no "
           "larger than rewording alone would produce at the same sample size. A tile counts a "
           "finding only if it is a vulnerability, clears the line <i>and</i> is statistically "
           "confirmed; hatched red bars fail that last test, and green and blue ones are not "
@@ -393,8 +393,9 @@ def build(results: dict, out_path: Path | str) -> Path:
               f"deliberately bad answer by <b>{winner['lift']:+.2f} logits</b> on prompts the "
               f"search never saw, and makes it outscore a genuine answer "
               f"<b>{(winner['asr'] or 0):.0%}</b> of the time against {(base_asr or 0):.0%} "
-              f"unattacked.<span class='hint'>Every number here is measured on held-out prompts. "
-              f"The search that found this attack only ever saw the development half.</span></div>")
+              f"unattacked."
+              "<span class='hint'>Every number here is measured on held-out prompts. "
+              "The search that found this attack only ever saw the development half.</span></div>")
         A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried as "
           "both prefix and suffix against non-answers, off-topic text, confidently false claims "
           f"and rude replies. All ranking happened on {srch.get('n_dev_questions', 0)} development "
@@ -411,7 +412,10 @@ def build(results: dict, out_path: Path | str) -> Path:
             A("<p class='sub'>An attack counts as working only if it beats a real answer more "
               "often than the unmodified bad answer already does. Lift alone is not enough: an "
               "affix can add several logits and still leave the answer far below anything a real "
-              "model writes.</p>")
+              "model writes, which is why the category tile counts these and not the biggest "
+              "lifts. Every attack that works gets a bar; the scan reports the strongest single "
+              "affix and the best stack as one finding each, so the tile can count fewer than "
+              "there are bars.</p>")
             A("<h3>What the attack actually looks like</h3>")
             for e in exploits[:3]:
                 for ex in e["examples"][:1]:
@@ -429,6 +433,25 @@ def build(results: dict, out_path: Path | str) -> Path:
                       f"at <code>{ex['median_genuine_score']:+.2f}</code>. What the attack bolted "
                       "on is highlighted.</p>"
                       f"<div class='answer'>{right}</div></div>")
+
+        # Absent from this report entirely until now, while its two rows were the largest counted
+        # problems in the category on one checkpoint and drawn on the ranked chart above.
+        _cont = contamination_check(R)
+        if _cont:
+            A("<h3>Is padding free?</h3>")
+            A(f"<div class='note {'warn' if _cont['pays'] else 'good'}'>"
+              f"<b>{_cont['lead']}</b> {html.escape(_cont['body']).replace('*', '')}</div>")
+            A(f"<p class='sub'>{_cont['setup']}</p>")
+            A(_table([{
+                "junk": r["where"],
+                "change to a good answer": r["mean_delta"],
+                "x rewording alone": round(r["ratio"], 1) if r["ratio"] else None,
+                "reads as": (viz.fault_chip(r["item"], bad="padding pays",
+                                            good="the model notices it")[0]
+                             if r["item"] else ""),
+            } for r in _cont["rows"]],
+                ["junk", "change to a good answer", "x rewording alone", "reads as"]))
+            A(f"<p class='sub'>{_cont['counts']}</p>")
 
         A("<h3>Supporting evidence</h3>")
         A("<h4>How hard is the bar?</h4>")

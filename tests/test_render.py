@@ -225,6 +225,9 @@ def test_exploit_ranking_orders_by_success_rate_not_lift():
          "asr": {"p50": 0.30}, "examples": []},
     ]
     fig = viz.exploit_ranking(exploits, 0.0)
+    # One colour throughout: orange for stacked and red for single read as a severity ramp, the
+    # same two colours the Moderate and High pills use, so the strongest attack looked the mildest.
+    assert fig.data[0].marker.color == viz.STATUS["critical"]
     # Horizontal bars are drawn bottom-up, so the last entry is the top of the chart.
     assert fig.data[0].y[-1] == "actually works"
 
@@ -593,3 +596,69 @@ def test_the_style_verdict_covers_the_check_as_well_as_the_transforms(rendered):
                                                                   tile["n_vulnerabilities"])
     # The report renders that exact line, so the tab and the tile cannot disagree in either.
     assert line.split("</b>", 1)[0].split(">")[-1] in html or not counted
+
+
+def test_every_problem_a_tile_counts_gets_a_bar():
+    """Ranking on size alone let counted problems fall off the bottom. On one scan every identity
+    finding did, so a tile reading "1 of 6 · Low · 1.5x" sat above a chart with no identity bar at
+    all; on another, identity had two material findings and only the larger survived, so the tab
+    showed two red bars and the overview one."""
+    # Informational fillers, as a real chart's top rows largely are: style preferences and control
+    # contrasts that are big but count toward nothing.
+    big = [{"title": f"b{i}", "effect": float(20 + i), "systematic_bar": 1.0, "confirmed": True,
+            "valence": "informational", "category": "style", "detail": {}}
+           for i in range(viz.MAX_ROWS + 4)]
+    small = [{"title": axis, "effect": e, "systematic_bar": 1.0, "confirmed": True,
+              "valence": "vulnerability", "category": "identity",
+              "detail": {"kind": "descriptor", "axis": axis}}
+             for axis, e in (("religion", 1.5), ("nationality", 1.1))]
+    fig = viz.findings_vs_noise(big + small)
+    labels = [y for t in fig.data for y, x in zip(t.y, t.x) if x is not None]
+    assert len(labels) == viz.MAX_ROWS, "the cap still holds"
+    # Both, not just the larger: the tile counts two, so the chart shows two.
+    assert any("religion" in lab for lab in labels), labels
+    assert any("nationality" in lab for lab in labels), labels
+    # Only what a tile actually counts is guaranteed. An immaterial finding is not.
+    tiny = dict(small[0], title="age", effect=0.2, detail={"kind": "descriptor", "axis": "age"})
+    fig2 = viz.findings_vs_noise(big + [tiny])
+    assert not any("age" in lab for lab in
+                   [y for t in fig2.data for y, x in zip(t.y, t.x) if x is not None])
+    # Nor is a healthy finding, however large.
+    huge_healthy = dict(big[0], title="junk costs", valence="healthy", effect=1.2,
+                        category="identity", detail={"kind": "descriptor", "axis": "disability"})
+    # (small enough to fall outside the cap on size alone, so only the guarantee could admit it)
+    fig3 = viz.findings_vs_noise(big + [huge_healthy])
+    assert not any("disability" in lab for lab in
+                   [y for t in fig3.data for y, x in zip(t.y, t.x) if x is not None])
+
+
+def test_the_cap_wins_when_more_problems_are_counted_than_there_are_rows():
+    """The guarantee cannot admit everything. When it must choose, the largest problems take the
+    chart, and the caption points at the full list for the rest."""
+    many = [{"title": f"v{i}", "effect": float(i + 2), "systematic_bar": 1.0, "confirmed": True,
+             "valence": "vulnerability", "category": "reward_hacking", "detail": {}}
+            for i in range(viz.MAX_ROWS + 6)]
+    fig = viz.findings_vs_noise(many)
+    vals = [x for t in fig.data for y, x in zip(t.y, t.x) if x is not None]
+    assert len(vals) == viz.MAX_ROWS
+    assert min(vals) == sorted(v["effect"] for v in many)[-viz.MAX_ROWS]
+
+
+def test_a_stacked_attack_names_its_stack():
+    """The single-affix row names its affix, so an unnamed "best stacked attack" beside it read as
+    a different kind of thing rather than the same thing with two affixes. New scans carry the
+    stack in the detail; older files still have it in the title."""
+    from_detail = {"category": "reward_hacking", "effect": 5.1, "systematic_bar": 1.0,
+                   "confirmed": True, "valence": "vulnerability", "title": "Best stacked attack",
+                   "detail": {"kind": "beam_search", "stack": ["sep_double", "lets_break"]}}
+    labels = [y for t in viz.findings_vs_noise([from_detail]).data for y in t.y]
+    assert any("sep_double + lets_break" in lab for lab in labels), labels
+    from_title = dict(from_detail, detail={"kind": "beam_search"},
+                      title="Best stacked attack (sep_good + consult_pro) lifts bad answers by …")
+    labels = [y for t in viz.findings_vs_noise([from_title]).data for y in t.y]
+    assert any("sep_good + consult_pro" in lab for lab in labels), labels
+    # A file with neither still gets a readable label rather than an empty one.
+    bare = dict(from_detail, detail={"kind": "beam_search"}, title="Best stacked attack")
+    labels = [y for t in viz.findings_vs_noise([bare]).data for y in t.y]
+    assert any(lab.startswith("best stacked attack ") or "best stacked attack" in lab
+               for lab in labels), labels
