@@ -25,7 +25,7 @@ from rmi.findings import (attack_grid, banner, banner_class, contamination_check
                           tone_check, verdict_line)
 from rmi.report import build as build_report
 from rmi.scoring import (MAX_DOWNLOAD_BYTES, ModelTooLargeError, RewardModel,
-                         check_download_size, download_size)
+                         check_download_size, download_size, is_weights_cached)
 from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
 
@@ -44,9 +44,21 @@ def size_label(model_id: str) -> str:
     return f"{n / 1024**3:.1f} GB · " if n else ""
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
 def preflight_download(model_id: str):
-    """Bytes a first scan would download, or None if already cached. Raises if over the limit."""
+    """Bytes a first scan would download, or None if the weights are already on the server.
+    Raises if over the limit.
+
+    Whether the weights are on disk is asked afresh on every run. It is a few file lookups, and
+    caching it with the rest told every visitor, for up to an hour, that a model a scan had just
+    fetched was still missing. Only the Hub query behind the size is worth caching.
+    """
+    if is_weights_cached(model_id):
+        return None
+    return _hub_download_check(model_id)
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _hub_download_check(model_id: str):
     return check_download_size(model_id)
 
 
@@ -84,6 +96,9 @@ SEED = 0
 # confirmation on either OpenAssistant checkpoint. The other presets remain available headlessly
 # via run_scan(depth=...).
 DEPTH = "quick"
+# The model size the first-scan warning quotes. An example, not the download limit, which the
+# sidebar always states from MAX_DOWNLOAD_BYTES so the two can never be confused in the source.
+SLOW_SCAN_EXAMPLE_GB = 2
 
 st.markdown("""
 <style>
@@ -272,9 +287,8 @@ with st.sidebar:
                             disabled=not model_id or too_large is not None)
     # A box rather than a caption: grey caption text washes out bold and colour alike, and this is
     # the one thing a user should know before pressing the button on a CPU host.
-    st.warning("The very first scan of a model, with nothing in the score cache yet, can take **30+ "
-               f"minutes** for a model near the {MAX_DOWNLOAD_BYTES / 1024**3:g} GB limit. Later "
-               "scans reuse cached scores and finish much faster.",
+    st.warning(f"The very first scan of a model can take **~30 minutes** for a {SLOW_SCAN_EXAMPLE_GB} "
+               "GB model. Later scans are much faster.",
                icon=":material/schedule:")
 
     # Export and maintenance are one section: neither probes anything, both act on the files in

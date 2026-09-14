@@ -232,3 +232,32 @@ def test_reward_hacking_is_opt_in_and_a_scan_without_it_renders(tmp_path):
     out = tmp_path / "report.html"
     build(runner.load_results(Path(scan["meta"]["results_path"])), out)
     assert out.stat().st_size > 0
+
+
+def test_the_download_notice_goes_once_the_model_is_on_the_server(dashboard, monkeypatch):
+    """The whole preflight used to be cached for an hour, server-wide, so after a scan fetched the
+    weights every visitor was still told the model was not on the server."""
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+
+    from rmi import scoring
+
+    on_disk = {"weights": False}
+    monkeypatch.setattr(scoring, "is_weights_cached", lambda *a, **k: on_disk["weights"])
+    monkeypatch.setattr(scoring, "download_size", lambda *a, **k: int(0.7 * 1024**3))
+    st.cache_data.clear()
+    scan, _ = dashboard
+    original = runner.RESULTS_DIR
+    runner.RESULTS_DIR = Path(scan["meta"]["results_path"]).parent
+    try:
+        at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"),
+                               default_timeout=500)
+        at.run()
+        notices = [i.value for i in at.sidebar.info if "not on the server yet" in i.value]
+        assert notices, "the notice should show while the weights are missing"
+        on_disk["weights"] = True  # a scan has fetched them
+        at.run()
+    finally:
+        runner.RESULTS_DIR = original
+    assert not at.exception, [e.value for e in at.exception]
+    assert not [i.value for i in at.sidebar.info if "not on the server yet" in i.value]
