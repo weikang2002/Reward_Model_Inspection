@@ -260,3 +260,131 @@ def test_the_dashboard_states_the_limit_without_hardcoding_it():
     assert src.count("MAX_DOWNLOAD_BYTES") >= 2, "the sidebar must state the limit"
     for literal in ("1 GB", "2 GB", "3 GB", "4 GB", "5 GB"):
         assert literal not in src, f"{literal!r} is hardcoded and will drift from the constant"
+
+
+# ---------------------------------------------------------------------------------------
+# download progress
+# ---------------------------------------------------------------------------------------
+
+
+def fake_download(monkeypatch, *, chunks=8, fail_on=None, on_own_thread=True):
+    """Stand in for hf_hub_download, reporting bytes the way huggingface_hub does: through a bar
+    from ``_get_progress_bar_context``. Xet updates that bar from its own threads, so by default
+    the bytes arrive on a thread the download did not start on."""
+    import threading
+    import time
+
+    import huggingface_hub
+    from huggingface_hub import file_download
+
+    fetched = []
+
+    def download(repo_id, filename, revision=None, **_):
+        if filename == fail_on:
+            raise OSError(f"network down fetching {filename}")
+        size = next(s.size for s in huggingface_hub.HfApi().model_info(repo_id).siblings
+                    if s.rfilename == filename)
+        bar = file_download._get_progress_bar_context(
+            desc=filename, log_level=30, total=size, name="huggingface_hub.xet_get")
+
+        def send():
+            for _ in range(chunks):
+                bar.update(size // chunks)
+                time.sleep(0.01)
+            bar.update(size - chunks * (size // chunks))
+
+        if on_own_thread:
+            t = threading.Thread(target=send)
+            t.start()
+            t.join()
+        else:
+            send()
+        bar.close()
+        fetched.append(filename)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
+    monkeypatch.setattr(scoring, "is_weights_cached", lambda *a, **k: False)
+    return fetched
+
+
+@pytest.mark.parametrize("on_own_thread", [True, False], ids=["xet", "http"])
+def test_a_download_reports_its_bytes_as_they_arrive(monkeypatch, on_own_thread):
+    fake_repo(monkeypatch, [("model-00001-of-00002.safetensors", 4_000_000),
+                            ("model-00002-of-00002.safetensors", 2_000_000),
+                            ("pytorch_model.bin", 6_000_000), ("config.json", 1_000)])
+    fetched = fake_download(monkeypatch, on_own_thread=on_own_thread)
+    seen = []
+    scoring.fetch_weights("fake/m", lambda done, total: seen.append((done, total)),
+                          poll_seconds=0.005)
+
+    # One format only, and the one transformers loads.
+    assert fetched == ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+    assert {t for _, t in seen} == {6_000_000}
+    assert seen[-1] == (6_000_000, 6_000_000)
+    done = [d for d, _ in seen]
+    assert done == sorted(done)
+    assert any(0 < d < 6_000_000 for d in done), "no intermediate progress was reported"
+
+
+def test_a_failed_download_raises_on_the_callers_thread(monkeypatch):
+    fake_repo(monkeypatch, [("model.safetensors", 1_000_000)])
+    fake_download(monkeypatch, fail_on="model.safetensors")
+    with pytest.raises(OSError, match="network down"):
+        scoring.fetch_weights("fake/m", lambda *a: None, poll_seconds=0.005)
+
+
+def test_a_cached_model_is_not_fetched_again(monkeypatch):
+    fake_repo(monkeypatch, [("model.safetensors", 1_000_000)])
+    fetched = fake_download(monkeypatch)
+    monkeypatch.setattr(scoring, "is_weights_cached", lambda *a, **k: True)
+    scoring.fetch_weights("fake/m", lambda *a: pytest.fail("nothing to report"))
+    assert fetched == []
+
+
+def test_the_byte_hook_is_still_where_huggingface_hub_reports_progress():
+    """The percentage rides on a private huggingface_hub function. If an upgrade moves it the scan
+    still downloads, but silently loses its progress, so fail here instead."""
+    import inspect
+
+    from huggingface_hub import file_download
+
+    assert hasattr(file_download, "_get_progress_bar_context")
+    for fn in (file_download.http_get, file_download.xet_get):
+        assert "_get_progress_bar_context(" in inspect.getsource(fn), fn.__name__
+
+
+def test_the_scan_bar_names_the_download_and_its_size():
+    from rmi.runner import _download_reporter
+
+    calls = []
+    report = _download_reporter("org/model", lambda frac, label: calls.append((frac, label)))
+    report(GB // 4, GB)
+    report(GB, GB)
+    assert calls[0] == (0.25, "Downloading org/model: 25% (0.25 of 1.00 GB)")
+    assert calls[1][0] == 1.0 and "loading" in calls[1][1]
+    assert _download_reporter("org/model", None) is None
+
+
+def test_weights_are_fetched_over_plain_http_and_the_setting_is_restored(monkeypatch):
+    """Xet reports its bytes in a burst near the end, which leaves the bar at 0% for most of the
+    wait. huggingface_hub reads the switch per download, so it only needs holding for the fetch."""
+    import inspect
+
+    import huggingface_hub
+    from huggingface_hub import constants, file_download
+
+    assert "constants.HF_HUB_DISABLE_XET" in inspect.getsource(file_download)
+    fake_repo(monkeypatch, [("model.safetensors", 1_000_000)])
+    fake_download(monkeypatch)
+    during = []
+    download = huggingface_hub.hf_hub_download
+
+    def watching(*a, **k):
+        during.append(constants.HF_HUB_DISABLE_XET)
+        return download(*a, **k)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", watching)
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_XET", False)
+    scoring.fetch_weights("fake/m", lambda *a: None, poll_seconds=0.005)
+    assert during == [True]
+    assert constants.HF_HUB_DISABLE_XET is False

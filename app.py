@@ -55,6 +55,11 @@ def cached_results(path: str, mtime: float) -> dict:
     """Keyed on mtime so a re-run of the same file invalidates the cache."""
     return load_results(path)
 
+
+def result_label(path: Path) -> str:
+    """How a results file is named in a dropdown."""
+    return path.name.replace("__", " · ").replace(".json", "")
+
 st.set_page_config(page_title="Reward Model Inspection", page_icon="🔍", layout="wide")
 
 PRESET_MODELS = [
@@ -74,6 +79,7 @@ SEED = 0
 st.markdown("""
 <style>
   .block-container {padding-top: 2.2rem; max-width: 1500px;}
+  .st-key-scan_progress {margin-top: 1.8rem;}
   .tile {border:1px solid #e6e5e1; border-radius:10px; padding:14px 16px; background:#fcfcfb;
          height:100%;}
   .tile h4 {margin:0 0 6px 0; font-size:13px; letter-spacing:.04em; text-transform:uppercase;
@@ -190,9 +196,15 @@ with st.sidebar:
     # result is what the rest of the session is, so the picker is the first thing in reach.
     st.markdown("### Open a past model scan to see results")
     files = list_results()
-    labels = [f.name.replace("__", " · ").replace(".json", "") for f in files]
-    picked = st.selectbox("Results file", labels, index=len(labels) - 1 if labels else None) \
-        if files else None
+    labels = [result_label(f) for f in files]
+    # A finished scan names its file here and reruns. The picker otherwise keeps the run that was
+    # on screen before the scan, and the loader below then reloads that over the fresh result.
+    # Widget state can only be written before the widget is drawn, hence the hand-off.
+    if (after_scan := st.session_state.pop("pick_after_scan", None)) in labels:
+        st.session_state["results_pick"] = after_scan
+    elif st.session_state.get("results_pick") not in labels and labels:
+        st.session_state["results_pick"] = labels[-1]
+    picked = st.selectbox("Results file", labels, key="results_pick") if files else None
     if not files:
         st.caption("No saved scans yet. Run one below and it is saved to `results/`.")
 
@@ -316,23 +328,27 @@ with st.sidebar:
         )
 
 if run_clicked:
-    bar = st.progress(0.0, text="starting")
+    # The first thing on the page, so it sits under Streamlit's opaque 60px toolbar unless pushed
+    # clear of it: the title below normally is, by its own margin, but a progress bar has none.
+    scan_box = st.container(key="scan_progress")
+    bar = scan_box.progress(0.0, text="starting")
 
     def cb(frac, label):
         bar.progress(min(frac, 1.0), text=label)
 
     try:
-        with st.spinner(f"Scanning {model_id}"):
+        with scan_box, st.spinner(f"Scanning {model_id}"):
             res = run_scan(model_id, depth=depth, probes=tuple(chosen), calibrate=calibrate,
                            seed=SEED, verbose=False, progress_cb=cb)
     except ModelTooLargeError as exc:
         bar.empty()
-        st.error(str(exc), icon=":material/block:")
+        scan_box.error(str(exc), icon=":material/block:")
         st.stop()
     bar.empty()
     st.session_state["results"] = res
     st.session_state["results_name"] = Path(res["meta"]["results_path"]).name
     st.session_state["results_path"] = res["meta"]["results_path"]
+    st.session_state["pick_after_scan"] = result_label(Path(res["meta"]["results_path"]))
     st.rerun()
 
 R = st.session_state.get("results")
@@ -1264,9 +1280,8 @@ with tabs[5]:
     else:
         other_label = st.selectbox(
             "Compare against",
-            [f.name.replace("__", " · ").replace(".json", "") for f in others])
-        of = others[[f.name.replace("__", " · ").replace(".json", "")
-                     for f in others].index(other_label)]
+            [result_label(f) for f in others])
+        of = others[[result_label(f) for f in others].index(other_label)]
         O = cached_results(str(of), of.stat().st_mtime)
         A_name = meta["model_id"].split("/")[-1]
         B_name = O["meta"]["model_id"].split("/")[-1]

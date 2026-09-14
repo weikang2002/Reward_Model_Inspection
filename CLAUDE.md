@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 248 tests, ~34s
+uv run pytest -q                           # 257 tests, ~36s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -296,6 +296,14 @@ An already-cached model is never blocked however large it is, so re-running a sc
 already paid for keeps working; only a fresh download is gated. An undeterminable size proceeds
 rather than blocking, since the usual cause is being offline and the download then fails with a
 clearer error.
+
+**Download progress rides on a private hook, over plain HTTP.** `scoring.fetch_weights` fetches
+the checkpoint on a worker thread before `from_pretrained` runs, and counts bytes by wrapping
+`huggingface_hub.file_download._get_progress_bar_context`, which both the HTTP and Xet paths
+report through; the Hub has no public byte callback. It holds `HF_HUB_DISABLE_XET` for the fetch
+because Xet reports its bytes in a burst near the end: 0% for 39 of 45 seconds on a 0.25 GB file,
+against 48 seconds of steady progress over HTTP. Watching `.incomplete` blobs grow does not work for
+the same reason. `tests/test_download_guard.py` fails if an upgrade moves either hook.
 
 ## Verification that matters
 

@@ -93,3 +93,45 @@ def test_a_drill_down_names_the_selection_it_follows(dashboard):
     assert any(h.startswith("##### Read the text sent to model, for ")
                for h in headings), headings
     assert any("when the user" in h for h in headings), headings
+
+
+@pytest.mark.parametrize("written", [
+    # A brand-new file that sorts first, so the picker's default of the last entry is not it.
+    "aaa__newest__quick__seed0.json",
+    # Re-scanning a run that is already listed, but not the one on screen: the picker's options do
+    # not change, so it keeps its old selection.
+    "stub__quick__seed0.json",
+])
+def test_a_finished_scan_is_what_the_dashboard_shows(dashboard, tmp_path, written):
+    """Finishing a scan reruns the app, and the picker then still named the run on screen before
+    the scan. The loader saw the picker disagree with the fresh result and reloaded the picked file
+    over it, so the new scan was never shown."""
+    from streamlit.testing.v1 import AppTest
+
+    scan, _ = dashboard
+    src = Path(scan["meta"]["results_path"])
+    (tmp_path / src.name).write_bytes(src.read_bytes())
+    (tmp_path / "zzz__other__quick__seed0.json").write_bytes(src.read_bytes())
+
+    def fake_run_scan(model_id, **_):
+        path = tmp_path / written
+        path.write_bytes(src.read_bytes())
+        res = runner.load_results(path)
+        res["meta"]["results_path"] = str(path)
+        return res
+
+    original = runner.RESULTS_DIR, runner.run_scan
+    runner.RESULTS_DIR, runner.run_scan = tmp_path, fake_run_scan
+    try:
+        at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"),
+                               default_timeout=500)
+        at.run()
+        assert at.session_state["results_name"] == "zzz__other__quick__seed0.json"
+        next(b for b in at.sidebar.button if b.label == "Run scan").click()
+        at.run()
+    finally:
+        runner.RESULTS_DIR, runner.run_scan = original
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.session_state["results_name"] == written
+    picker = next(s for s in at.sidebar.selectbox if s.label == "Results file")
+    assert picker.value == written.replace("__", " · ").replace(".json", "")

@@ -86,6 +86,26 @@ def _log(msg, verbose):
         print(f"  [{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _download_reporter(model_id: str, progress_cb):
+    """Turn byte counts from a first-run model download into progress bar updates.
+
+    The download shares the scan's bar, which then restarts from zero for the probes: a fresh
+    model is most of a first scan's wait, and a bar sitting at "starting" through it looks hung.
+    """
+    if progress_cb is None:
+        return None
+
+    def report(done: int, total: int):
+        gb = 1024**3
+        if done >= total:
+            progress_cb(1.0, f"Downloaded {model_id} ({total / gb:.2f} GB), loading it")
+        else:
+            progress_cb(done / total, f"Downloading {model_id}: {done / total:.0%} "
+                                      f"({done / gb:.2f} of {total / gb:.2f} GB)")
+
+    return report
+
+
 def run_scan(
     model_id: str,
     *,
@@ -104,7 +124,8 @@ def run_scan(
     t0 = time.time()
     # An injected scorer lets the whole orchestrator be exercised against a planted rule without
     # loading a model, which is how the end-to-end tests check what a scan writes onto a finding.
-    rm = scorer or RewardModel(model_id, device=device, batch_size=batch_size)
+    rm = scorer or RewardModel(model_id, device=device, batch_size=batch_size,
+                               download_progress=_download_reporter(model_id, progress_cb))
     steps = list(ALWAYS)
     if calibrate:
         steps += list(OPTIONAL)

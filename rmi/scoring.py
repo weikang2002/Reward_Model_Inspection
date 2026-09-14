@@ -24,6 +24,7 @@ import hashlib
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
@@ -123,11 +124,9 @@ def _classify(filename: str) -> str | None:
     return None
 
 
-def download_size(model_id: str, revision: str | None = None) -> int | None:
-    """Bytes ``from_pretrained`` would fetch for this repo, or None if it cannot be determined.
-
-    None means "no answer", not "nothing to download": the repo may be private, gated, or the
-    machine offline. Callers treat it as unknown rather than as zero.
+def _repo_plan(model_id: str, revision: str | None = None):
+    """The weight files ``from_pretrained`` would fetch, as (name, bytes), and the bytes of the small
+    files that come along. None when the Hub cannot be asked.
     """
     try:
         from huggingface_hub import HfApi
@@ -136,7 +135,7 @@ def download_size(model_id: str, revision: str | None = None) -> int | None:
     except Exception:
         return None
 
-    by_format: dict[str, int] = {}
+    by_format: dict[str, list[tuple[str, int]]] = {}
     aux = 0
     for sibling in info.siblings or []:
         name = sibling.rfilename
@@ -152,13 +151,31 @@ def download_size(model_id: str, revision: str | None = None) -> int | None:
             if name.endswith(_AUX_SUFFIXES):
                 aux += size
             continue  # an artifact for some other runtime; a PyTorch load never fetches it
-        by_format[kind] = by_format.get(kind, 0) + size
-    if not by_format:
-        return aux or None
+        by_format.setdefault(kind, []).append((name, size))
+
+    def total(files):
+        return sum(size for _, size in files)
+
     for label, _ in _WEIGHT_FORMATS:  # transformers takes the first format it finds
-        if by_format.get(label):
-            return by_format[label] + aux
-    return max(by_format.values()) + aux
+        if total(by_format.get(label, [])):
+            return label, by_format[label], aux
+    if not by_format:
+        return None, [], aux
+    label = max(by_format, key=lambda k: total(by_format[k]))
+    return label, by_format[label], aux
+
+
+def download_size(model_id: str, revision: str | None = None) -> int | None:
+    """Bytes ``from_pretrained`` would fetch for this repo, or None if it cannot be determined.
+
+    None means "no answer", not "nothing to download": the repo may be private, gated, or the
+    machine offline. Callers treat it as unknown rather than as zero.
+    """
+    plan = _repo_plan(model_id, revision)
+    if plan is None:
+        return None
+    _, weights, aux = plan
+    return sum(size for _, size in weights) + aux or None
 
 
 def is_weights_cached(model_id: str, revision: str | None = None) -> bool:
@@ -203,6 +220,128 @@ def check_download_size(model_id: str, *, revision: str | None = None,
             "or pass allow_large_download=True if you are sure this machine can take it."
         )
     return size
+
+
+# Bytes received so far by each thread that fetch_weights runs, keyed by thread id.
+_BYTE_COUNTERS: dict[int, list[int]] = {}
+_COUNTER_LOCK = threading.Lock()
+
+
+def _count_download_bytes() -> bool:
+    """Route huggingface_hub's per-file progress bars through a byte counter, once per process.
+
+    The Hub offers no public byte-level callback, but both of its download paths (plain HTTP and
+    the chunked Xet protocol) report every byte through ``_get_progress_bar_context``. Watching
+    the file grow on disk does not work: a Xet download writes nothing for most of its run, then
+    hundreds of megabytes at once. Returns False when a future huggingface_hub has moved the hook,
+    in which case downloads still work and only the percentage is lost.
+    """
+    from huggingface_hub import file_download
+
+    original = getattr(file_download, "_get_progress_bar_context", None)
+    if original is None:
+        return False
+    if getattr(original, "_rmi_counting", False):
+        return True
+
+    def counting(*args, **kwargs):
+        bar = original(*args, **kwargs)
+        # The bar is made on the thread that asked for the file, but Xet updates it from its own
+        # threads, so the counter is chosen here rather than at update time.
+        counter = _BYTE_COUNTERS.get(threading.get_ident())
+        if counter is not None and hasattr(bar, "update"):
+            counter[0] += kwargs.get("initial") or 0  # a resumed download starts part-way
+            forward = bar.update
+
+            def update(n=1):
+                with _COUNTER_LOCK:
+                    counter[0] += n or 0
+                return forward(n)
+
+            bar.update = update
+        return bar
+
+    counting._rmi_counting = True
+    file_download._get_progress_bar_context = counting
+    return True
+
+
+_XET_LOCK = threading.Lock()
+_xet_state = {"holds": 0, "saved": False}
+
+
+@contextmanager
+def _without_xet():
+    """Fetch over plain HTTP for the duration, so bytes are reported as they arrive.
+
+    Measured on distilbert's 0.25 GB checkpoint, Xet reported 0% for 39 of its 45 seconds and
+    plain HTTP took 48 seconds with steady progress throughout: the percentage costs nothing and
+    is useless without this. The setting is process-wide, so concurrent fetches share one hold.
+    """
+    from huggingface_hub import constants
+
+    with _XET_LOCK:
+        if _xet_state["holds"] == 0:
+            _xet_state["saved"] = constants.HF_HUB_DISABLE_XET
+        _xet_state["holds"] += 1
+        constants.HF_HUB_DISABLE_XET = True
+    try:
+        yield
+    finally:
+        with _XET_LOCK:
+            _xet_state["holds"] -= 1
+            if _xet_state["holds"] == 0:
+                constants.HF_HUB_DISABLE_XET = _xet_state["saved"]
+
+
+def fetch_weights(model_id: str, on_progress, *, revision: str | None = None,
+                  poll_seconds: float = 0.25) -> None:
+    """Download the checkpoint ``from_pretrained`` will load, calling ``on_progress(done, total)``.
+
+    Only the weight files are fetched here, since they are the whole wait; ``from_pretrained``
+    then finds them cached and picks up the small config and tokenizer files itself. The download
+    runs on a worker thread and ``on_progress`` is only ever called from the caller's thread,
+    because Streamlit can only draw from the thread running the script.
+
+    Does nothing when the weights are already cached or the Hub cannot be asked, leaving any error
+    to ``from_pretrained``, which reports it more clearly.
+    """
+    if Path(model_id).is_dir() or is_weights_cached(model_id, revision):
+        return
+    plan = _repo_plan(model_id, revision)
+    # TensorFlow and Flax weights are not what a PyTorch load reads, so fetching them would only
+    # waste the download before from_pretrained refuses.
+    if plan is None or plan[0] not in ("safetensors", "pytorch"):
+        return
+    files = plan[1]
+    total = sum(size for _, size in files)
+    if not total or not _count_download_bytes():
+        return
+
+    from huggingface_hub import hf_hub_download
+
+    counter = [0]
+    failure: list[BaseException] = []
+
+    def work():
+        _BYTE_COUNTERS[threading.get_ident()] = counter
+        try:
+            for name, _ in files:
+                hf_hub_download(model_id, name, revision=revision)
+        except BaseException as exc:  # re-raised on the caller's thread
+            failure.append(exc)
+        finally:
+            _BYTE_COUNTERS.pop(threading.get_ident(), None)
+
+    worker = threading.Thread(target=work, name=f"fetch-{model_id}", daemon=True)
+    with _without_xet():
+        worker.start()
+        while worker.is_alive():
+            on_progress(min(counter[0], total), total)
+            worker.join(poll_seconds)
+    if failure:
+        raise failure[0]
+    on_progress(total, total)
 
 
 @dataclass(frozen=True)
@@ -316,6 +455,7 @@ class RewardModel:
         progress: bool = False,
         allow_large_download: bool = False,
         prompt_format: str | None = None,
+        download_progress=None,
     ):
         self.model_id = model_id
         self.prompt_format = prompt_format or prompt_format_for(model_id)
@@ -332,6 +472,8 @@ class RewardModel:
         self.download_bytes = check_download_size(
             model_id, allow_large=allow_large_download
         )
+        if download_progress is not None:
+            fetch_weights(model_id, download_progress)
 
         config = AutoConfig.from_pretrained(model_id)
         n_labels = getattr(config, "num_labels", None)
