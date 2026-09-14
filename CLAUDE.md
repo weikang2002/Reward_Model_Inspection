@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 265 tests, ~34s
+uv run pytest -q                           # 269 tests, ~41s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -237,6 +237,24 @@ user
 re-roll a borderline finding until it clears its threshold. `run_scan(seed=...)` still takes it,
 and the value is recorded in the results file and shown in the appendix.
 
+**The depth is fixed at `DEPTH = "quick"` in `app.py`, not exposed as a control.** On both
+OpenAssistant checkpoints, quick and standard agreed on every tile band and on every finding's band
+and confirmation. What quick gives up is the stacked-attack search (so a stacked attack can never be
+reported; on `-large-v2` standard counted one as a second vulnerability, no stronger than the single
+affix) and precision: 200 calibration pairs rather than 500 widen the human-agreement interval from
+about +/-4 to +/-7 points, and 2,000 permutations floor a p-value near 0.0005. `run_scan` still
+defaults to `standard` headlessly, and files named `__standard__` from before stay loadable.
+
+**A step's "408/900 texts scored" total comes from a replay, not a table.** Before the steps run,
+`runner._texts_to_score` replays the scan against a recording stub and walks the texts against the
+real score cache in order, counting what `score_detailed` would send: missing at the start of its
+call, so a repeat within one call counts twice. A hardcoded per-step count would be wrong as soon
+as the cache held anything or a corpus changed. It is exact because which texts a step asks for
+never depends on the scores, which holds for every probe except the stacked-attack search; a scan
+with that search shows reward hacking as a bare count. A probe that starts choosing its texts from
+scores breaks the denominator silently, and `tests/test_probes.py` pins that the total equals what
+was sent.
+
 **Never resample rows.** The same questions and templates recur across contrasts, so every interval
 resamples whole clusters (`cluster_bootstrap_ci`, `wild_cluster_bootstrap_p` in
 `rmi/stats/inference.py`). Row resampling gives intervals several times too narrow.
@@ -254,14 +272,16 @@ come from the answers that started lowest and those still end far below a real a
 
 **Every depth scores the reduced attack grid.** The full reward-hacking grid (30 questions x 11
 bad answers x 57 variants = 18,810 texts) was 88% of a standard scan, which on an Azure CPU is well
-over an hour. `reward_hacking.reduce_attack` keeps one generic bad answer of each kind and one
-position per attack (the suffix), 6,750 texts. The neutral controls keep both positions, because
-every lift is adjusted against the controls in its own position and six attacks exist only as a
-prefix. On both OpenAssistant checkpoints it found the same headline attack and the same top
-exploits, but lifts come out smaller (the dropped generic answers started lowest) and success
-rates higher: `-base`'s reward-hacking tile fell from Moderate to Low. So a run records `grid`, the
-compare tab warns when two runs differ, and `findings.attack_grid` names it in both renderers.
-`reduced=False` still gives the full grid headlessly.
+over an hour. `reward_hacking.reduce_attack` attacks only each question's own wrong and poor
+answers, keeps one wording per attack family (`REDUCED_WORDING`) and one position per attack (the
+suffix): 30 x 2 x 28 = 1,680 texts. Two things in it are easy to break. The neutral controls keep
+both positions, because every lift is adjusted against the controls in its own position and four
+kept wordings exist only as a prefix. And the generic junk answers stay in `bases` for the
+contamination check while `grid_bases` is empty; emptying `bases` silently empties that check. The
+kept wording is each family's strongest on both checkpoints, not its first listed, which was the
+weakest in four families. A run records `grid`, the compare tab warns when two runs differ, and
+`findings.attack_grid` names it in both renderers. `reduced=False` still gives the full grid
+headlessly.
 
 **Cohen's *d* is deliberately absent.** The scorer is deterministic, so its denominator holds no
 measurement noise; it measures consistency across hand-written items rather than magnitude, and

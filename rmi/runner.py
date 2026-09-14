@@ -21,7 +21,7 @@ from .probes import noise_floor as nfm
 from .probes import style as stm
 from .probes import sycophancy as sym
 from .probes.sycophancy import INSISTENCE_PHRASE
-from .scoring import RewardModel, Scorer
+from .scoring import RewardModel, Scorer, StubScorer
 from .stats.inference import adjust_family, bh_fdr
 
 # Anchored to the repo root rather than the working directory, so the dashboard finds past runs
@@ -112,6 +112,51 @@ def _download_reporter(model_id: str, progress_cb):
     return report
 
 
+def _texts_to_score(rm, model_id: str, *, depth: str, probes, calibrate: bool,
+                    seed: int) -> dict[str, int | None]:
+    """How many texts each step will send to the model: the denominator of the progress label.
+
+    Replays the scan against a scorer that only records what it is asked for, then walks those
+    texts against the real score cache in order, the way ``RewardModel.score_detailed`` decides:
+    a text is sent when the cache lacks it at the start of its call, so a repeat within one call
+    is sent twice. Which texts a step asks for never depends on the scores, with one exception:
+    the stacked-attack search follows them, so reward hacking gets None when it runs and its label
+    shows a count alone. The replay runs 20 resampling draws instead of thousands and stops once the
+    last step has asked for its texts, since neither the draws nor the ranking choose a text: 3.1
+    seconds on an M1 Pro became a fraction of that.
+    """
+    calls: dict[str, list[list]] = {}
+    current: list[str | None] = [None]
+
+    class Recorder(StubScorer):
+        def score_detailed(self, pairs):
+            pairs = list(pairs)
+            if current[0] is not None:
+                calls.setdefault(current[0], []).append(pairs)
+            return super().score_detailed(pairs)
+
+    def follow(_frac, label):
+        current[0] = label[len("running "):] if label.startswith("running ") else None
+
+    run_scan(model_id, depth=depth, probes=probes, calibrate=calibrate, seed=seed, verbose=False,
+             progress_cb=follow, scorer=Recorder(), _rehearsal=True)
+
+    sent: set[str] = set()
+    totals: dict[str, int | None] = {}
+    for name, step_calls in calls.items():
+        n = 0
+        for pairs in step_calls:
+            keys = [rm._key(q, a) for q, a in pairs]
+            cached = rm.cache.get_many([k for k in dict.fromkeys(keys) if k not in sent])
+            todo = [k for k in keys if k not in sent and k not in cached]
+            n += len(todo)
+            sent.update(todo)
+        totals[name] = n
+    if PRESETS[depth]["beam_depth"] > 0:
+        totals["reward_hacking"] = None
+    return totals
+
+
 def run_scan(
     model_id: str,
     *,
@@ -125,8 +170,12 @@ def run_scan(
     verbose: bool = True,
     progress_cb=None,
     scorer: Scorer | None = None,
+    _rehearsal: bool = False,
 ) -> dict:
     cfg = PRESETS[depth]
+    if _rehearsal:
+        # Only which texts get asked for matters here; resampling draws never choose one.
+        cfg = {**cfg, "n_boot": 20, "n_perm": 20, "reg_boot": 20}
     t0 = time.time()
     # An injected scorer lets the whole orchestrator be exercised against a planted rule without
     # loading a model, which is how the end-to-end tests check what a scan writes onto a finding.
@@ -137,7 +186,7 @@ def run_scan(
         steps += list(OPTIONAL)
     steps += [p for p in PROBES if p in probes]
 
-    live = {"label": "", "frac": 0.0, "n": 0, "t0": 0.0, "shown": 0.0}
+    live = {"label": "", "frac": 0.0, "n": 0, "total": None, "t0": 0.0, "shown": 0.0}
 
     def step(i, name):
         now = time.time()
@@ -154,8 +203,10 @@ def run_scan(
         if progress_cb and now - live["shown"] >= LIVE_UPDATE_SECONDS:
             live["shown"] = now
             rate = live["n"] / max(now - live["t0"], 1e-9)
-            progress_cb(live["frac"], f"{live['label']}: {live['n']:,} texts scored, "
-                                      f"{rate:.0f} a second")
+            done = f"{live['n']:,}"
+            if live["total"] and live["n"] <= live["total"]:
+                done += f"/{live['total']:,}"
+            progress_cb(live["frac"], f"{live['label']}: {done} texts scored, {rate:.0f} a second")
 
     results: dict = {
         "meta": {
@@ -171,12 +222,19 @@ def run_scan(
         "sanity_check": rm.sanity_check(),
     }
 
+    # Only a scorer with a cache can say what it will skip; the stub and the replay itself have none.
+    totals: dict[str, int | None] = {}
+    if progress_cb and hasattr(rm, "cache") and hasattr(rm, "_key"):
+        progress_cb(0.0, "counting the texts to score")
+        totals = _texts_to_score(rm, model_id, depth=depth, probes=probes, calibrate=calibrate,
+                                 seed=seed)
     if hasattr(rm, "on_batch"):
         rm.on_batch = scored
     corpus = nfm.load_corpus()
     nf = None
     for i, name in enumerate(steps):
         step(i, f"running {name}")
+        live["total"] = totals.get(name)
         if name == "noise_floor":
             nf = nfm.run(rm, corpus)
             results["noise_floor"] = nf.summary()
@@ -204,6 +262,9 @@ def run_scan(
             r["contamination"] = rh.contamination(rm, corpus, n_boot=cfg["n_boot"],
                                                    seed=seed, noise_floor=nf, reduced=reduced)
             results["reward_hacking"] = r
+
+    if _rehearsal:
+        return results
 
     step(len(steps), "correcting for multiplicity")
     _apply_multiplicity(results, seed=seed, n_perm=min(cfg["n_perm"], 5000))

@@ -171,3 +171,64 @@ def test_comparing_runs_on_different_attack_grids_warns(dashboard, tmp_path):
     page = out.read_text()
     assert "reduced attack grid" in page
     assert "both prefix and suffix" not in page
+
+
+def test_the_dashboard_has_no_depth_control_and_scans_at_quick(dashboard, tmp_path):
+    """Depth is fixed like the seed. A slider left in place would silently run a different preset
+    from the one the app claims."""
+    from streamlit.testing.v1 import AppTest
+
+    scan, _ = dashboard
+    src = Path(scan["meta"]["results_path"])
+    (tmp_path / src.name).write_bytes(src.read_bytes())
+    asked = {}
+
+    def fake_run_scan(model_id, **kwargs):
+        asked.update(kwargs)
+        res = runner.load_results(tmp_path / src.name)
+        res["meta"]["results_path"] = str(tmp_path / src.name)
+        return res
+
+    original = runner.RESULTS_DIR, runner.run_scan
+    runner.RESULTS_DIR, runner.run_scan = tmp_path, fake_run_scan
+    try:
+        at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"),
+                               default_timeout=500)
+        at.run()
+        assert not [s for s in at.sidebar.select_slider if s.label == "Depth"]
+        next(b for b in at.sidebar.button if b.label == "Run scan").click()
+        at.run()
+    finally:
+        runner.RESULTS_DIR, runner.run_scan = original
+    assert not at.exception, [e.value for e in at.exception]
+    assert asked["depth"] == "quick"
+
+
+def test_reward_hacking_is_opt_in_and_a_scan_without_it_renders(tmp_path):
+    """It scores more texts than every other probe together, so on a CPU host it starts unticked
+    and says what it costs. A scan that skipped it must still render in both places."""
+    from streamlit.testing.v1 import AppTest
+
+    from rmi.report import build
+
+    scan = runner.run_scan("stub", depth="quick", probes=("identity", "sycophancy", "style"),
+                           calibrate=False, verbose=False, out_dir=tmp_path,
+                           scorer=StubScorer(rule="length", coef=0.02))
+    assert "reward_hacking" not in scan
+    original = runner.RESULTS_DIR
+    runner.RESULTS_DIR = tmp_path
+    try:
+        at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"),
+                               default_timeout=500)
+        at.run()
+    finally:
+        runner.RESULTS_DIR = original
+    assert not at.exception, [e.value for e in at.exception]
+    boxes = {c.label: c.value for c in at.sidebar.checkbox}
+    assert boxes["Reward hacking"] is False
+    assert all(boxes[label] for label in ("Identity", "Sycophancy", "Style and length"))
+    assert any("Adds about 5–10 min" in c.value for c in at.sidebar.caption)
+
+    out = tmp_path / "report.html"
+    build(runner.load_results(Path(scan["meta"]["results_path"])), out)
+    assert out.stat().st_size > 0

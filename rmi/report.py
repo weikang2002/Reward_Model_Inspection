@@ -400,8 +400,7 @@ def build(results: dict, out_path: Path | str) -> Path:
                  f"time, against {(base_asr or 0):.0%} unattacked."],
                 "Every number here is measured on held-out prompts. The search that found this "
                 "attack only ever saw the development half."))
-        A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried "
-          "against non-answers, off-topic text, confidently false claims and rude replies, on "
+        A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried on "
           f"{html.escape(attack_grid(R) or '')}. All ranking happened on "
           f"{srch.get('n_dev_questions', 0)} development "
           "prompts"

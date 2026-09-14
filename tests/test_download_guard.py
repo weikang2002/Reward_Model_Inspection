@@ -221,8 +221,6 @@ def test_the_limit_is_configurable(monkeypatch):
 SHIPPED = {
     "OpenAssistant/reward-model-deberta-v3-base": 0.70 * GB,
     "OpenAssistant/reward-model-deberta-v3-large-v2": 1.63 * GB,
-    "Ray2333/gpt2-large-harmless-reward_model": 2.89 * GB,
-    "Ray2333/gpt2-large-helpful-reward_model": 2.89 * GB,
 }
 
 

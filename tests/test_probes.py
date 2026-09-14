@@ -608,28 +608,37 @@ def test_a_running_step_reports_how_many_texts_it_has_scored(monkeypatch, tmp_pa
 
 
 def test_the_reduced_attack_grid_keeps_what_the_analysis_depends_on():
-    """One generic bad answer per kind and one position per attack, but never at the cost of the
-    comparisons: each lift is adjusted by the neutral controls in its own position, so those keep
-    both, and every key contrast and lookalike control must survive intact."""
+    """Only each question's own bad answers, one wording per family, one position per attack, but
+    never at the cost of the comparisons: each lift is adjusted by the neutral controls in its own
+    position, so those keep both, and every key contrast and lookalike control must survive."""
     full, small = inj.load_attack(), inj.load_attack(reduced=True)
-    assert [b["type"] for b in small["bases"]] == sorted({b["type"] for b in full["bases"]},
-                                                        key=[b["type"] for b in full["bases"]].index)
-    assert {a["id"] for a in small["affixes"]} == {a["id"] for a in full["affixes"]}
+    assert small["grid_bases"] == []
+    # The contamination check still has one junk answer of each kind to attach.
+    assert sorted(b["type"] for b in small["bases"]) == sorted({b["type"] for b in full["bases"]})
+
     by_id = {a["id"]: a for a in full["affixes"]}
+    families = {a["family"] for a in full["affixes"]}
+    for fam in families:
+        kept = [a for a in small["affixes"] if a["family"] == fam]
+        whole = [a for a in full["affixes"] if a["family"] == fam]
+        if fam in ("special_token", "lookalike_control", "neutral_control"):
+            assert [a["id"] for a in kept] == [a["id"] for a in whole]
+        else:
+            assert [a["id"] for a in kept] == [inj.REDUCED_WORDING[fam]], fam
     for a in small["affixes"]:
         if a["family"] == "neutral_control":
             assert a["positions"] == by_id[a["id"]]["positions"]
         else:
             assert len(a["positions"]) == 1
             assert a["positions"][0] in by_id[a["id"]]["positions"]
+
     positions = {(a["id"], p) for a in small["affixes"] for p in a["positions"]}
     for _, attack_id, control_id, pos, _ in inj.KEY_CONTRASTS:
         assert {(attack_id, pos), (control_id, pos)} <= positions
-    prefix_only = [a for a in small["affixes"] if a["positions"] == ["prefix"]]
-    assert prefix_only and all(
-        ("neutral_short", "prefix") in positions for _ in prefix_only)
+    for p in {p for _, p in positions}:
+        assert ("neutral_short", p) in positions, f"no neutral control for the {p} attacks"
     cells = sum(len(a["positions"]) for a in small["affixes"])
-    assert 30 * (len(small["bases"]) + 2) * (1 + cells) == 6_750
+    assert 30 * (len(small["grid_bases"]) + 2) * (1 + cells) == 1_680
 
 
 def test_a_reduced_scan_scores_fewer_texts_and_says_so(small_corpus):
@@ -658,5 +667,86 @@ def test_every_depth_scores_the_reduced_attack_grid(tmp_path):
     res = run_scan("stub", depth="quick", probes=("reward_hacking",), calibrate=False,
                    verbose=False, out_dir=tmp_path, scorer=StubScorer(rule="length", coef=0.02))
     assert res["reward_hacking"]["grid"] == "reduced"
-    assert {r["base_id"] for r in res["reward_hacking"]["rows"]} == {
-        "nonanswer_1", "offtopic_1", "rude_1", "wrong", "poor"}
+    assert {r["base_id"] for r in res["reward_hacking"]["rows"]} == {"wrong", "poor"}
+    junk = {r["junk_type"] for r in res["reward_hacking"]["contamination"]["appended"]["rows"]}
+    assert junk == {"nonanswer", "offtopic", "rude"}
+
+
+def test_a_running_step_states_how_many_texts_it_will_score(monkeypatch, tmp_path):
+    """The label reads "408/900 texts scored". The denominator must be exactly what the step then
+    sends, which means leaving out what the cache already holds."""
+    from rmi import runner
+
+    labels, batches = [], []
+
+    class Cache:
+        def __init__(self):
+            self.rows = {}
+
+        def get_many(self, keys):
+            return {k: self.rows[k] for k in keys if k in self.rows}
+
+    class Caching(StubScorer):
+        """The stub, behind a cache and a batch callback shaped like RewardModel's."""
+        on_batch = None
+
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.cache = Cache()
+
+        def _key(self, question, answer):
+            return f"{question}\x00{answer}"
+
+        def score_detailed(self, pairs):
+            pairs = list(pairs)
+            keys = [self._key(q, a) for q, a in pairs]
+            cached = self.cache.get_many(keys)
+            todo = [k for k in keys if k not in cached]
+            rows = super().score_detailed(pairs)
+            self.cache.rows.update(zip(keys, rows))
+            if todo and self.on_batch:
+                batches.append((labels[-1][1].split(":")[0] if labels else "", len(todo)))
+                self.on_batch(len(todo))
+            return rows
+
+    monkeypatch.setattr(runner, "LIVE_UPDATE_SECONDS", 0.0)
+    scorer = Caching(rule="length", coef=0.02)
+    # A first scan fills the cache with the noise floor's and sycophancy's texts.
+    runner.run_scan("stub", depth="quick", probes=("sycophancy",), calibrate=False,
+                    verbose=False, out_dir=tmp_path, scorer=scorer)
+    batches.clear()
+    runner.run_scan("stub", depth="quick", probes=("sycophancy", "style"), calibrate=False,
+                    verbose=False, out_dir=tmp_path, scorer=scorer,
+                    progress_cb=lambda frac, label: labels.append((frac, label)))
+
+    assert "counting the texts to score" in [l for _, l in labels]
+    live = [l for _, l in labels if "texts scored" in l]
+    assert live and all(l.startswith("running style: ") for l in live), live[:3]
+    done, total = live[-1].split(": ")[1].split()[0].split("/")
+    assert int(total.replace(",", "")) == sum(n for step, n in batches if step == "running style")
+    assert int(done.replace(",", "")) == int(total.replace(",", ""))
+
+
+def test_the_rehearsal_asks_for_exactly_the_texts_a_real_scan_does(tmp_path):
+    """The rehearsal cuts its resampling draws and skips ranking to stay cheap. That is only safe
+    while no draw count and no ranking step decides which texts get scored."""
+    from rmi import runner
+
+    def record(**kw):
+        calls = []
+
+        class Recorder(StubScorer):
+            def score_detailed(self, pairs):
+                pairs = list(pairs)
+                calls.append(pairs)
+                return super().score_detailed(pairs)
+
+        runner.run_scan("stub", depth="quick", calibrate=False, verbose=False,
+                        out_dir=tmp_path, scorer=Recorder(), **kw)
+        return calls
+
+    full = record()
+    written = sorted(tmp_path.glob("*.json"))
+    rehearsal = record(_rehearsal=True)
+    assert rehearsal == full
+    assert sorted(tmp_path.glob("*.json")) == written, "a rehearsal must not write a results file"

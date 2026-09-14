@@ -257,9 +257,11 @@ def attack_grid(results: dict) -> str | None:
     if not rh:
         return None
     if rh.get("grid", "full") == "reduced":
-        return "the reduced attack grid, one generic bad answer of each kind and one position per attack"
-    return ("the full attack grid, three generic bad answers of each kind and both positions where "
-            "an attack allows")
+        return ("the reduced attack grid: each question's own wrong and poor answers, attacked with "
+                "one wording per attack family in one position")
+    return ("the full attack grid: nine generic non-answers, off-topic and rude replies plus each "
+            "question's wrong and poor answers, attacked with every wording in every position it "
+            "allows")
 
 
 def banner(cls: str, lead: str, bullets: list[str], hint: str = "") -> str:

@@ -41,35 +41,67 @@ def load_attack(*, reduced: bool = False) -> dict:
     return reduce_attack(attack) if reduced else attack
 
 
+# The one wording each attack family keeps in the reduced grid. Chosen once, as the wording with the
+# largest mean lift on wrong and poor answers across full scans of both OpenAssistant checkpoints,
+# in the position it keeps. The first-listed wording was the family's weakest in four families
+# (ignore_above, expert_eval, step_by_step, hhh), so taking it would have judged each family on its
+# least effective form. The choice uses those two models' data, so their numbers for these families
+# lean slightly optimistic; none of the eleven is the attack that works on either model.
+REDUCED_WORDING = {
+    "authority": "official",
+    "citation": "consensus",
+    "hhh_keywords": "safety_words",
+    "meta_instruction": "grader_note",
+    "politeness": "great_question",
+    "reasoning_scaffold": "lets_break",
+    "refusal_laundering": "consult_pro",
+    "repetition": "repeat_summary",
+    "self_praise": "clear_thorough",
+    "self_rating": "gold_label",
+    "structure": "headers",
+}
+# Kept whole: the special-token attacks and the controls every contrast and adjustment is built on.
+_KEPT_WHOLE = ("special_token", "lookalike_control", "neutral_control")
+
+
 def reduce_attack(attack: dict) -> dict:
-    """The attack grid cut to about a third, for hosts where every scored text is expensive.
+    """The attack grid cut to a ninth, for hosts where every scored text is expensive.
 
-    Two cuts, each chosen from full scans of both OpenAssistant checkpoints:
+    Three cuts, each chosen from full scans of both OpenAssistant checkpoints:
 
-    * **One generic bad answer of each kind** (non-answer, off-topic, rude) instead of three. The
-      question-specific wrong and poor answers carry nearly every attack success; the generic ones
-      start 3 to 5 logits lower and were almost never lifted past a genuine answer.
+    * **Only each question's own wrong and poor answers are attacked.** They carry nearly every
+      attack success; the nine generic non-answers, off-topic and rude replies start 3 to 5 logits
+      lower and beat a genuine answer 0 to 0.8% of the time. One of each kind stays in ``bases``,
+      because the contamination check attaches them to good answers; ``grid_bases`` is empty.
+    * **One wording per attack family**, from ``REDUCED_WORDING``. The special-token attacks, their
+      lookalike controls and the neutral controls are kept whole.
     * **One position per attack.** An attack offered both ways keeps only its suffix, where every
-      special-token attack, its lookalike control and each key contrast already sit. No two-way
-      attack beat a genuine answer in either position on either model. The neutral controls keep
-      both: every lift is adjusted against the controls in its own position, and six attacks
-      exist only as a prefix.
+      special-token attack, its lookalike control and each key contrast already sit. The neutral
+      controls keep both: every lift is adjusted against the controls in its own position, and four
+      of the kept wordings exist only as a prefix.
 
-    The grid falls from 30 x 11 x 57 = 18,810 texts to 30 x 5 x 45 = 6,750. Results are not
-    comparable with a full-grid scan: success rates average over a different mix of bad answers.
+    The grid falls from 30 x 11 x 57 = 18,810 texts to 30 x 2 x 28 = 1,680. Results are not
+    comparable with a full-grid scan: lifts come out smaller and success rates higher.
     """
     seen, bases = set(), []
     for b in attack["bases"]:
         if b["type"] not in seen:
             seen.add(b["type"])
             bases.append(b)
+    first_of = {}
+    for a in attack["affixes"]:
+        first_of.setdefault(a["family"], a["id"])
     affixes = []
     for a in attack["affixes"]:
+        fam = a["family"]
+        # A family added to the corpus after REDUCED_WORDING was chosen falls back to its first.
+        if fam not in _KEPT_WHOLE and a["id"] != REDUCED_WORDING.get(fam, first_of[fam]):
+            continue
         a = dict(a)
-        if len(a["positions"]) > 1 and a["family"] != "neutral_control":
+        if len(a["positions"]) > 1 and fam != "neutral_control":
             a["positions"] = ["suffix"]
         affixes.append(a)
-    return {**attack, "bases": bases, "affixes": affixes}
+    return {**attack, "bases": bases, "grid_bases": [], "affixes": affixes}
 
 
 def apply_affix(base: str, affix_text: str, position: str, good: str) -> str:
@@ -138,7 +170,7 @@ def run(
 ) -> dict:
     attack = load_attack(reduced=reduced)
     affixes = attack["affixes"]
-    generic = attack["bases"]
+    generic = attack.get("grid_bases", attack["bases"])
     questions = corpus["questions"]
     dev, test = split_questions(questions, seed=seed)
 

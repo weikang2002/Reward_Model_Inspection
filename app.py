@@ -26,7 +26,7 @@ from rmi.findings import (attack_grid, banner, banner_class, contamination_check
 from rmi.report import build as build_report
 from rmi.scoring import (MAX_DOWNLOAD_BYTES, ModelTooLargeError, RewardModel,
                          check_download_size, download_size)
-from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, PRESETS, RESULTS_DIR,
+from rmi.runner import (PROBE_GROUPS, PROBE_LABELS, PROBES, RESULTS_DIR,
                         list_results, load_results, probe_heading, run_scan)
 
 
@@ -62,19 +62,28 @@ def result_label(path: Path) -> str:
 
 st.set_page_config(page_title="Reward Model Inspection", page_icon="🔍", layout="wide")
 
+# The first entry is the dropdown's default. Base leads because it is the one a CPU host can scan
+# in reasonable time: about 3x faster than large-v2, and 0.7 GB to download against 1.6 GB.
 PRESET_MODELS = [
-    "OpenAssistant/reward-model-deberta-v3-large-v2",
     "OpenAssistant/reward-model-deberta-v3-base",
-    "Ray2333/gpt2-large-harmless-reward_model",
-    "Ray2333/gpt2-large-helpful-reward_model",
+    "OpenAssistant/reward-model-deberta-v3-large-v2",
 ]
 OTHER = "Other (type below)"
+# Reward hacking scores more texts than every other probe together (1,861 of 4,220 at quick depth),
+# so on a CPU host it is opt-in, and says what ticking it costs.
+OFF_BY_DEFAULT = {"reward_hacking"}
+PROBE_NOTES = {"reward_hacking": "Adds about 5–10 min."}
 
 # Fixed rather than offered as a control. The seed changes only resampling draws and the attack
 # dev/test split, so a box for it mostly invites re-rolling until a borderline finding turns
 # significant, which is the one habit this project's statistics exist to prevent. A genuinely
 # different split is still available headlessly via run_scan(seed=...).
 SEED = 0
+# Every scan from the dashboard runs at quick depth: on a cloud CPU the standard and deep presets'
+# extra permutation draws and stacked-attack search cost minutes for no finding that changed band or
+# confirmation on either OpenAssistant checkpoint. The other presets remain available headlessly
+# via run_scan(depth=...).
+DEPTH = "quick"
 
 st.markdown("""
 <style>
@@ -249,19 +258,16 @@ with st.sidebar:
             if not (len(members) == 1 and PROBE_LABELS[members[0]] == group_title):
                 st.markdown(f'<div class="grouphead">{group_title}</div>', unsafe_allow_html=True)
             for probe in members:
-                if st.checkbox(PROBE_LABELS[probe], value=True, key=f"probe_{probe}"):
+                if st.checkbox(PROBE_LABELS[probe], value=probe not in OFF_BY_DEFAULT,
+                               key=f"probe_{probe}"):
                     chosen.append(probe)
+                if probe in PROBE_NOTES:
+                    st.caption(PROBE_NOTES[probe])
     # Each fact hangs off the control it is about rather than sitting in a paragraph under both.
     calibrate = st.checkbox(
         "Measure agreement with humans", value=True,
         help="Scores held-out Anthropic/hh-rlhf preference pairs. Needs a one-off dataset "
              "download the first time.")
-    depth = st.select_slider(
-        "Depth", options=list(PRESETS), value="standard", format_func=str.capitalize,
-        help="Depth sets how many bootstrap and permutation draws each test uses, and how far the "
-             "attack search looks. Deep is wider and slower; scores are cached, so re-running a "
-             "model you have already scanned is near-instant.")
-    st.caption("Quick skips the stacked-attack search, so it cannot find one.")
     run_clicked = st.button("Run scan", type="primary", width="stretch",
                             disabled=not model_id or too_large is not None)
 
@@ -338,7 +344,7 @@ if run_clicked:
 
     try:
         with scan_box, st.spinner(f"Scanning {model_id}"):
-            res = run_scan(model_id, depth=depth, probes=tuple(chosen), calibrate=calibrate,
+            res = run_scan(model_id, depth=DEPTH, probes=tuple(chosen), calibrate=calibrate,
                            seed=SEED, verbose=False, progress_cb=cb)
     except ModelTooLargeError as exc:
         bar.empty()
