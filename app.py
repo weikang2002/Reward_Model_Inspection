@@ -245,8 +245,8 @@ with st.sidebar:
             st.error(too_large, icon=":material/block:")
         else:
             if pending:
-                st.info(f"First run will download {pending / 1024**3:.1f} GB of "
-                        f"{MAX_DOWNLOAD_BYTES / 1024**3:g} GB allowed.",
+                st.info(f"Model file not on the server yet. The first scan fetches it from "
+                        f"Hugging Face ({pending / 1024**3:.1f} GB) to server box before scoring.",
                         icon=":material/download:")
 
     st.markdown("**Probe for**")
@@ -270,6 +270,12 @@ with st.sidebar:
              "download the first time.")
     run_clicked = st.button("Run scan", type="primary", width="stretch",
                             disabled=not model_id or too_large is not None)
+    # A box rather than a caption: grey caption text washes out bold and colour alike, and this is
+    # the one thing a user should know before pressing the button on a CPU host.
+    st.warning("The very first scan of a model, with nothing in the score cache yet, can take **30+ "
+               f"minutes** for a model near the {MAX_DOWNLOAD_BYTES / 1024**3:g} GB limit. Later "
+               "scans reuse cached scores and finish much faster.",
+               icon=":material/schedule:")
 
     # Export and maintenance are one section: neither probes anything, both act on the files in
     # results/ rather than on a model, and grouping them keeps the two things that do run a scan

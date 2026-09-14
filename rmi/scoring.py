@@ -435,10 +435,13 @@ class ScoreCache:
         conn.execute("BEGIN")
         try:
             conn.executemany("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?,?)", rows)
+            conn.execute("COMMIT")
         except BaseException:
-            conn.execute("ROLLBACK")
+            # COMMIT can fail too, on a busy lock over a network share, and leaves the transaction
+            # open; every later BEGIN on this thread would then raise.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
-        conn.execute("COMMIT")
 
 
 def pick_device(requested: str | None = None) -> str:

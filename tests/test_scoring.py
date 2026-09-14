@@ -82,6 +82,39 @@ def test_a_failed_cache_write_leaves_no_partial_rows(tmp_path):
     assert c.get_many(["after"])["after"].score == 3.0
 
 
+def test_a_failed_commit_does_not_leave_the_cache_stuck_in_a_transaction(tmp_path):
+    """A busy lock on a network share can fail the COMMIT itself. Left open, that transaction made
+    every later write on the thread raise "cannot start a transaction within a transaction"."""
+    import sqlite3
+
+    c = ScoreCache(tmp_path / "s.sqlite")
+    real = c._conn()
+
+    class CommitFailsOnce:
+        failed = False
+
+        def execute(self, sql, *args):
+            if sql == "COMMIT" and not CommitFailsOnce.failed:
+                CommitFailsOnce.failed = True
+                raise sqlite3.OperationalError("database is locked")
+            return real.execute(sql, *args)
+
+        def executemany(self, *args):
+            return real.executemany(*args)
+
+        @property
+        def in_transaction(self):
+            return real.in_transaction
+
+    c._local.conn = CommitFailsOnce()
+    with pytest.raises(sqlite3.OperationalError):
+        c.put_many([("lost", _scored(1.0))])
+    assert not real.in_transaction
+    assert c.get_many(["lost"]) == {}
+    c.put_many([("after", _scored(2.0))])
+    assert c.get_many(["after"])["after"].score == 2.0
+
+
 def test_cache_key_separates_every_field_that_changes_the_score():
     """Two different inputs sharing a key would serve one model's score for another's question."""
     class FakeRM:

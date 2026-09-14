@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 269 tests, ~41s
+uv run pytest -q                           # 270 tests, ~42s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -276,12 +276,14 @@ over an hour. `reward_hacking.reduce_attack` attacks only each question's own wr
 answers, keeps one wording per attack family (`REDUCED_WORDING`) and one position per attack (the
 suffix): 30 x 2 x 28 = 1,680 texts. Two things in it are easy to break. The neutral controls keep
 both positions, because every lift is adjusted against the controls in its own position and four
-kept wordings exist only as a prefix. And the generic junk answers stay in `bases` for the
-contamination check while `grid_bases` is empty; emptying `bases` silently empties that check. The
+kept wordings exist only as a prefix. And `bases` keeps one junk answer of each kind for the contamination check while
+`grid_bases` is empty: that check drops from nine junk answers to three, so its numbers shift
+too, and emptying `bases` would silently empty it. The
 kept wording is each family's strongest on both checkpoints, not its first listed, which was the
 weakest in four families. A run records `grid`, the compare tab warns when two runs differ, and
-`findings.attack_grid` names it in both renderers. `reduced=False` still gives the full grid
-headlessly.
+`findings.attack_grid` names it in both renderers. `run_scan` has no switch back:
+every preset sets `reduced_attack_grid`, so the full grid needs `reward_hacking.run(reduced=False)`
+called directly, and a headless rescan overwrites an older full-grid file of the same name.
 
 **Cohen's *d* is deliberately absent.** The scorer is deterministic, so its denominator holds no
 measurement noise; it measures consistency across hand-written items rather than magnitude, and
