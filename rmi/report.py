@@ -16,7 +16,7 @@ from . import methodology
 from . import severity as sev
 from .runner import probe_heading
 from . import viz
-from .findings import (banner, contamination_check, module_items, overview_verdict,
+from .findings import (attack_grid, banner, contamination_check, module_items, overview_verdict,
                        self_check, substance_check, tile_body, tone_check,
                        verdict_line)
 from .textdiff import word_diff
@@ -400,9 +400,10 @@ def build(results: dict, out_path: Path | str) -> Path:
                  f"time, against {(base_asr or 0):.0%} unattacked."],
                 "Every number here is measured on held-out prompts. The search that found this "
                 "attack only ever saw the development half."))
-        A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried as "
-          "both prefix and suffix against non-answers, off-topic text, confidently false claims "
-          f"and rude replies. All ranking happened on {srch.get('n_dev_questions', 0)} development "
+        A(f"<p><b>How this was searched.</b> {srch.get('n_candidates', 0)} affixes were tried "
+          "against non-answers, off-topic text, confidently false claims and rude replies, on "
+          f"{html.escape(attack_grid(R) or '')}. All ranking happened on "
+          f"{srch.get('n_dev_questions', 0)} development "
           "prompts"
           + (f", then a beam search stacked up to {beam['depth']} of them on the same prompts"
              if beam else "")

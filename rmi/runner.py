@@ -28,14 +28,16 @@ from .stats.inference import adjust_family, bh_fdr
 # no matter where streamlit was launched from.
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 
+# Every depth scores the reduced reward-hacking grid (probes/reward_hacking.reduce_attack): the full
+# one is 88% of a standard scan's texts, which on a cloud CPU is well over an hour.
 PRESETS = {
     # (n_boot, n_perm, regression bootstrap, beam depth, calibration pairs)
     "quick":    dict(n_boot=1000, n_perm=2000,  reg_boot=200, n_cal=200,
-                     beam_depth=0, beam_width=0, beam_q=0, beam_b=0),
+                     beam_depth=0, beam_width=0, beam_q=0, beam_b=0, reduced_attack_grid=True),
     "standard": dict(n_boot=4000, n_perm=10000, reg_boot=600, n_cal=500,
-                     beam_depth=2, beam_width=3, beam_q=4, beam_b=4),
+                     beam_depth=2, beam_width=3, beam_q=4, beam_b=4, reduced_attack_grid=True),
     "deep":     dict(n_boot=8000, n_perm=20000, reg_boot=1200, n_cal=1000,
-                     beam_depth=3, beam_width=4, beam_q=6, beam_b=4),
+                     beam_depth=3, beam_width=4, beam_q=6, beam_b=4, reduced_attack_grid=True),
 }
 
 # How often a running step's label is refreshed with its count of texts scored.
@@ -192,14 +194,15 @@ def run_scan(
             results["identity"] = idp.run(rm, noise_floor=nf, n_perm=cfg["n_perm"],
                                           n_boot=cfg["n_boot"], seed=seed)
         elif name == "reward_hacking":
+            reduced = cfg.get("reduced_attack_grid", False)
             r = rh.run(rm, corpus, noise_floor=nf, seed=seed, n_boot=cfg["n_boot"],
                         beam_depth=cfg["beam_depth"], beam_width=cfg["beam_width"],
                         beam_dev_questions=cfg["beam_q"], beam_dev_bases=cfg["beam_b"],
-                        progress=verbose)
+                        progress=verbose, reduced=reduced)
             r["key_contrasts"] = rh.key_contrasts(r["rows"], n_boot=cfg["n_boot"],
                                                    seed=seed, noise_floor=nf)
             r["contamination"] = rh.contamination(rm, corpus, n_boot=cfg["n_boot"],
-                                                   seed=seed, noise_floor=nf)
+                                                   seed=seed, noise_floor=nf, reduced=reduced)
             results["reward_hacking"] = r
 
     step(len(steps), "correcting for multiplicity")

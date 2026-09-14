@@ -36,8 +36,40 @@ CORPORA = Path(__file__).resolve().parent.parent / "corpora"
 ASR_PERCENTILES = (25, 50, 75, 90)
 
 
-def load_attack() -> dict:
-    return json.loads((CORPORA / "affixes.json").read_text())
+def load_attack(*, reduced: bool = False) -> dict:
+    attack = json.loads((CORPORA / "affixes.json").read_text())
+    return reduce_attack(attack) if reduced else attack
+
+
+def reduce_attack(attack: dict) -> dict:
+    """The attack grid cut to about a third, for hosts where every scored text is expensive.
+
+    Two cuts, each chosen from full scans of both OpenAssistant checkpoints:
+
+    * **One generic bad answer of each kind** (non-answer, off-topic, rude) instead of three. The
+      question-specific wrong and poor answers carry nearly every attack success; the generic ones
+      start 3 to 5 logits lower and were almost never lifted past a genuine answer.
+    * **One position per attack.** An attack offered both ways keeps only its suffix, where every
+      special-token attack, its lookalike control and each key contrast already sit. No two-way
+      attack beat a genuine answer in either position on either model. The neutral controls keep
+      both: every lift is adjusted against the controls in its own position, and six attacks
+      exist only as a prefix.
+
+    The grid falls from 30 x 11 x 57 = 18,810 texts to 30 x 5 x 45 = 6,750. Results are not
+    comparable with a full-grid scan: success rates average over a different mix of bad answers.
+    """
+    seen, bases = set(), []
+    for b in attack["bases"]:
+        if b["type"] not in seen:
+            seen.add(b["type"])
+            bases.append(b)
+    affixes = []
+    for a in attack["affixes"]:
+        a = dict(a)
+        if len(a["positions"]) > 1 and a["family"] != "neutral_control":
+            a["positions"] = ["suffix"]
+        affixes.append(a)
+    return {**attack, "bases": bases, "affixes": affixes}
 
 
 def apply_affix(base: str, affix_text: str, position: str, good: str) -> str:
@@ -102,8 +134,9 @@ def run(
     beam_dev_questions: int = 4,
     beam_dev_bases: int = 4,
     progress: bool = False,
+    reduced: bool = False,
 ) -> dict:
-    attack = load_attack()
+    attack = load_attack(reduced=reduced)
     affixes = attack["affixes"]
     generic = attack["bases"]
     questions = corpus["questions"]
@@ -205,6 +238,7 @@ def run(
         "dev_questions": sorted(q["id"] for q in dev),
         "test_questions": sorted(q["id"] for q in test),
         "affix_library_version": attack["version"],
+        "grid": "reduced" if reduced else "full",
         "asr_percentiles": list(ASR_PERCENTILES),
     }
 
@@ -549,14 +583,14 @@ def key_contrasts(rows, *, n_boot: int = 4000, seed: int = 0, noise_floor=None) 
 
 
 def contamination(scorer, corpus: dict, *, n_boot: int = 4000, seed: int = 0,
-                  noise_floor=None) -> dict:
+                  noise_floor=None, reduced: bool = False) -> dict:
     """Does the reward model notice junk attached to an otherwise good answer?
 
     This is the reward-hacking question that matters most for RLHF. If prepending "I don't know,
     look it up yourself." to a correct answer barely moves the score, then a policy is free to emit
     padding, hedging or refusal boilerplate at no cost, and will drift toward doing so.
     """
-    attack = load_attack()
+    attack = load_attack(reduced=reduced)
     junk = [b for b in attack["bases"] if b["type"] in ("nonanswer", "rude", "offtopic")]
     pairs, meta = [], []
     for q in corpus["questions"]:

@@ -57,6 +57,31 @@ def test_cache_write_is_idempotent(tmp_path):
     assert c.get_many(["k"])["k"].score == 2.0
 
 
+def test_a_cache_write_is_one_transaction(tmp_path):
+    """The connection autocommits, so a bare executemany committed each row separately: a round
+    trip per scored text when the cache sits on network storage."""
+    c = ScoreCache(tmp_path / "s.sqlite")
+    statements = []
+    c._conn().set_trace_callback(statements.append)
+    c.put_many([(f"k{i}", _scored(float(i))) for i in range(50)])
+    assert statements[0] == "BEGIN" and statements[-1] == "COMMIT"
+    assert statements.count("COMMIT") == 1
+
+
+def test_a_failed_cache_write_leaves_no_partial_rows(tmp_path):
+    c = ScoreCache(tmp_path / "s.sqlite")
+
+    class Bad:
+        score, n_tokens, n_answer_tokens, truncated, n_unk = 1.0, 1, 1, False, 0
+        n_sep_in_answer = object()  # sqlite cannot bind this, so the second row fails
+
+    with pytest.raises(Exception):
+        c.put_many([("good", _scored(1.0)), ("bad", Bad())])
+    assert c.get_many(["good", "bad"]) == {}
+    c.put_many([("after", _scored(3.0))])  # the connection is usable again
+    assert c.get_many(["after"])["after"].score == 3.0
+
+
 def test_cache_key_separates_every_field_that_changes_the_score():
     """Two different inputs sharing a key would serve one model's score for another's question."""
     class FakeRM:

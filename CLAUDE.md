@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 259 tests, ~37s
+uv run pytest -q                           # 265 tests, ~34s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
@@ -251,6 +251,17 @@ held-out measurement, and `shrinkage` is the gap. Ranking and reporting on the s
 winner's curse; the searched stack loses ~0.7 logits across the split while single affixes lose
 almost nothing. Exploit examples are selected by *final score*, not lift, because the biggest lifts
 come from the answers that started lowest and those still end far below a real answer.
+
+**Every depth scores the reduced attack grid.** The full reward-hacking grid (30 questions x 11
+bad answers x 57 variants = 18,810 texts) was 88% of a standard scan, which on an Azure CPU is well
+over an hour. `reward_hacking.reduce_attack` keeps one generic bad answer of each kind and one
+position per attack (the suffix), 6,750 texts. The neutral controls keep both positions, because
+every lift is adjusted against the controls in its own position and six attacks exist only as a
+prefix. On both OpenAssistant checkpoints it found the same headline attack and the same top
+exploits, but lifts come out smaller (the dropped generic answers started lowest) and success
+rates higher: `-base`'s reward-hacking tile fell from Moderate to Low. So a run records `grid`, the
+compare tab warns when two runs differ, and `findings.attack_grid` names it in both renderers.
+`reduced=False` still gives the full grid headlessly.
 
 **Cohen's *d* is deliberately absent.** The scorer is deterministic, so its denominator holds no
 measurement noise; it measures consistency across hand-written items rather than magnitude, and

@@ -135,3 +135,39 @@ def test_a_finished_scan_is_what_the_dashboard_shows(dashboard, tmp_path, writte
     assert at.session_state["results_name"] == written
     picker = next(s for s in at.sidebar.selectbox if s.label == "Results file")
     assert picker.value == written.replace("__", " · ").replace(".json", "")
+
+
+def test_comparing_runs_on_different_attack_grids_warns(dashboard, tmp_path):
+    """The reduced grid reports smaller lifts and higher success rates for the same model. Side by
+    side with a full-grid run that reads as a difference between models unless something says so."""
+    import json
+
+    from streamlit.testing.v1 import AppTest
+
+    from rmi.report import build
+
+    scan, _ = dashboard
+    src = Path(scan["meta"]["results_path"])
+    assert scan["reward_hacking"]["grid"] == "reduced"
+    (tmp_path / "b_reduced__quick__seed0.json").write_bytes(src.read_bytes())
+    old = json.loads(src.read_text())
+    del old["reward_hacking"]["grid"]  # written before the reduced grid existed
+    (tmp_path / "a_full__quick__seed0.json").write_text(json.dumps(old))
+
+    original = runner.RESULTS_DIR
+    runner.RESULTS_DIR = tmp_path
+    try:
+        at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / "app.py"),
+                               default_timeout=500)
+        at.run()
+    finally:
+        runner.RESULTS_DIR = original
+    assert not at.exception, [e.value for e in at.exception]
+    warnings = [w.value for w in at.warning if "probed reward hacking differently" in w.value]
+    assert warnings and "reduced attack grid" in warnings[0] and "full attack grid" in warnings[0]
+
+    out = tmp_path / "report.html"
+    build(runner.load_results(tmp_path / "b_reduced__quick__seed0.json"), out)
+    page = out.read_text()
+    assert "reduced attack grid" in page
+    assert "both prefix and suffix" not in page

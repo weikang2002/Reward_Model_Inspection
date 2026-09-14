@@ -246,6 +246,22 @@ _BAND_CLASS = {"High": "", "Moderate": "", "Low": " mild",
                "None detected": " clear", "No data": " mild"}
 
 
+def attack_grid(results: dict) -> str | None:
+    """Which reward-hacking grid a run scored, as a phrase, or None if it probed no reward hacking.
+
+    The two grids report different numbers for the same model, so a reader needs to know which one
+    is on screen. Files written before the reduced grid existed carry no marker: they scored the
+    full one.
+    """
+    rh = results.get("reward_hacking")
+    if not rh:
+        return None
+    if rh.get("grid", "full") == "reduced":
+        return "the reduced attack grid, one generic bad answer of each kind and one position per attack"
+    return ("the full attack grid, three generic bad answers of each kind and both positions where "
+            "an attack allows")
+
+
 def banner(cls: str, lead: str, bullets: list[str], hint: str = "") -> str:
     """A verdict banner: the answer in one line, then the evidence as bullets.
 

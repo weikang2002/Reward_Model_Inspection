@@ -605,3 +605,58 @@ def test_a_running_step_reports_how_many_texts_it_has_scored(monkeypatch, tmp_pa
                                             if step == "running noise_floor")
     assert {f for f, l in live if l.startswith("running noise_floor")} == {0.0}
     assert {f for f, l in live if l.startswith("running sycophancy")} == {0.5}
+
+
+def test_the_reduced_attack_grid_keeps_what_the_analysis_depends_on():
+    """One generic bad answer per kind and one position per attack, but never at the cost of the
+    comparisons: each lift is adjusted by the neutral controls in its own position, so those keep
+    both, and every key contrast and lookalike control must survive intact."""
+    full, small = inj.load_attack(), inj.load_attack(reduced=True)
+    assert [b["type"] for b in small["bases"]] == sorted({b["type"] for b in full["bases"]},
+                                                        key=[b["type"] for b in full["bases"]].index)
+    assert {a["id"] for a in small["affixes"]} == {a["id"] for a in full["affixes"]}
+    by_id = {a["id"]: a for a in full["affixes"]}
+    for a in small["affixes"]:
+        if a["family"] == "neutral_control":
+            assert a["positions"] == by_id[a["id"]]["positions"]
+        else:
+            assert len(a["positions"]) == 1
+            assert a["positions"][0] in by_id[a["id"]]["positions"]
+    positions = {(a["id"], p) for a in small["affixes"] for p in a["positions"]}
+    for _, attack_id, control_id, pos, _ in inj.KEY_CONTRASTS:
+        assert {(attack_id, pos), (control_id, pos)} <= positions
+    prefix_only = [a for a in small["affixes"] if a["positions"] == ["prefix"]]
+    assert prefix_only and all(
+        ("neutral_short", "prefix") in positions for _ in prefix_only)
+    cells = sum(len(a["positions"]) for a in small["affixes"])
+    assert 30 * (len(small["bases"]) + 2) * (1 + cells) == 6_750
+
+
+def test_a_reduced_scan_scores_fewer_texts_and_says_so(small_corpus):
+    class Counting(StubScorer):
+        n = 0
+
+        def score_detailed(self, pairs):
+            pairs = list(pairs)
+            Counting.n += len(pairs)
+            return super().score_detailed(pairs)
+
+    counts, grids = {}, {}
+    for reduced in (False, True):
+        Counting.n = 0
+        res = inj.run(Counting(), small_corpus, n_boot=100, seed=0, reduced=reduced)
+        counts[reduced], grids[reduced] = Counting.n, res["grid"]
+    assert grids == {False: "full", True: "reduced"}
+    assert counts[True] < counts[False] / 2
+
+
+def test_every_depth_scores_the_reduced_attack_grid(tmp_path):
+    """The full grid is 88% of a standard scan; on a cloud CPU that is most of the wait."""
+    from rmi.runner import PRESETS, run_scan
+
+    assert all(cfg.get("reduced_attack_grid") for cfg in PRESETS.values())
+    res = run_scan("stub", depth="quick", probes=("reward_hacking",), calibrate=False,
+                   verbose=False, out_dir=tmp_path, scorer=StubScorer(rule="length", coef=0.02))
+    assert res["reward_hacking"]["grid"] == "reduced"
+    assert {r["base_id"] for r in res["reward_hacking"]["rows"]} == {
+        "nonanswer_1", "offtopic_1", "rude_1", "wrong", "poor"}

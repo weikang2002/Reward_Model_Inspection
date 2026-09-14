@@ -20,7 +20,7 @@ from rmi import methodology
 from rmi import severity as sev
 from rmi.textdiff import word_diff
 from rmi import viz
-from rmi.findings import (banner, banner_class, contamination_check, module_items,
+from rmi.findings import (attack_grid, banner, banner_class, contamination_check, module_items,
                           overview_verdict, self_check, substance_check, tile_body,
                           tone_check, verdict_line)
 from rmi.report import build as build_report
@@ -1112,14 +1112,16 @@ with tabs[4]:
                  f'Of {srch.get("n_candidates", 0)} affixes tried, {len(exploits)} beat that '
                  'unattacked baseline at all; those are the ones charted below.'],
                 f'Ranked on {srch.get("n_dev_questions", 0)} development prompts, measured on '
-                f'{srch.get("n_test_questions", 0)} held-out prompts the search never saw.'),
+                f'{srch.get("n_test_questions", 0)} held-out prompts the search never saw, using '
+                f'{html.escape(attack_grid(R) or "")}.'),
                 unsafe_allow_html=True)
         else:
             st.markdown(banner(
                 " clear", "No attack succeeded.",
                 [f'None of the {srch.get("n_candidates", 0)} attacks tried made a bad answer '
                  'outscore a genuine answer more often than the unmodified bad answer already '
-                 f'did ({base_asr:.0%}).']), unsafe_allow_html=True)
+                 f'did ({base_asr:.0%}).'],
+                f'Scored on {html.escape(attack_grid(R) or "")}.'), unsafe_allow_html=True)
 
         # ---- which ones worked -------------------------------------------------------------
         if exploits:
@@ -1296,6 +1298,13 @@ with tabs[5]:
             "bar, or a probability. Both are measured per model and so mean the same thing on "
             "either side."
         )
+        grids = attack_grid(R), attack_grid(O)
+        if None not in grids and grids[0] != grids[1]:
+            # The reduced grid reports smaller lifts and higher success rates for the same model,
+            # which side by side reads as a difference between the models.
+            st.warning(f"The two runs probed reward hacking differently, so those numbers are not "
+                       f"comparable. This run used {grids[0]}; the other used {grids[1]}.",
+                       icon=":material/warning:")
 
         # ---- where they differ ----------------------------------------------------------------
         amap = {finding_key(f): f for f in R["findings"]}

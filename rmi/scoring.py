@@ -426,8 +426,19 @@ class ScoreCache:
             (k, s.score, s.n_tokens, s.n_answer_tokens, int(s.truncated), s.n_unk, s.n_sep_in_answer)
             for k, s in items
         ]
-        if rows:
-            self._conn().executemany("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?,?)", rows)
+        if not rows:
+            return
+        # One transaction for the lot. The connection autocommits, so a bare executemany committed
+        # every row on its own: 60x slower on a local SSD, and a network round trip per row where
+        # the cache sits on network storage, as an App Service /home does.
+        conn = self._conn()
+        conn.execute("BEGIN")
+        try:
+            conn.executemany("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?,?)", rows)
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
 
 def pick_device(requested: str | None = None) -> str:
