@@ -510,6 +510,9 @@ class RewardModel:
 
         self.revision = getattr(config, "_commit_hash", None) or "unknown"
         self.cache = ScoreCache(Path(cache_path))
+        # Called with the number of rows each model batch scored. A probe can hand over tens of
+        # thousands of texts in one call, which on CPU is most of an hour with nothing to show.
+        self.on_batch = None
         self._n_scored = 0
         self._n_cache_hits = 0
 
@@ -648,6 +651,8 @@ class RewardModel:
                 for j, val in zip(sel, logits):
                     m = meta[j]
                     fresh[keys[todo[j]]] = Scored(score=float(val), **m)
+                if self.on_batch is not None:
+                    self.on_batch(len(sel))
             self.cache.put_many(fresh.items())
             cached.update(fresh)
             self._n_scored += len(todo)

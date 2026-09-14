@@ -180,6 +180,18 @@ def test_a_cached_row_is_not_rescored(fake):
     assert rm._n_cache_hits == 5
 
 
+def test_each_model_batch_is_reported_and_a_cache_hit_is_not(fake):
+    """The scan's live count of texts scored is built from these calls."""
+    rm, _, mdl = fake(batch_size=2)
+    reported = []
+    rm.on_batch = reported.append
+    pairs = [("q", f"answer {i}") for i in range(5)]
+    rm.score_detailed(pairs)
+    assert reported == mdl.batches == [2, 2, 1]
+    rm.score_detailed(pairs)
+    assert reported == [2, 2, 1], "a cached row reaches no model, so it is not reported"
+
+
 def test_scores_come_back_in_the_order_they_were_asked_for(fake):
     """Batching is length-sorted internally, so a lost index would silently transpose answers."""
     rm, _, _ = fake(batch_size=2)

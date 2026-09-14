@@ -37,6 +37,10 @@ PRESETS = {
     "deep":     dict(n_boot=8000, n_perm=20000, reg_boot=1200, n_cal=1000,
                      beam_depth=3, beam_width=4, beam_q=6, beam_b=4),
 }
+
+# How often a running step's label is refreshed with its count of texts scored.
+LIVE_UPDATE_SECONDS = 1.0
+
 # What the scan actually probes for. These are the only things a user chooses between.
 PROBES = ("identity", "sycophancy", "style", "reward_hacking")
 
@@ -131,10 +135,25 @@ def run_scan(
         steps += list(OPTIONAL)
     steps += [p for p in PROBES if p in probes]
 
+    live = {"label": "", "frac": 0.0, "n": 0, "t0": 0.0, "shown": 0.0}
+
     def step(i, name):
+        now = time.time()
+        live.update(label=name, frac=i / max(len(steps), 1), n=0, t0=now, shown=now)
         if progress_cb:
-            progress_cb(i / max(len(steps), 1), name)
+            progress_cb(live["frac"], name)
         _log(name, verbose)
+
+    def scored(n):
+        # Keeps a long step visibly alive. Without it the label stood still for as long as a
+        # step took, which on a CPU host read as a hung scan rather than a slow one.
+        live["n"] += n
+        now = time.time()
+        if progress_cb and now - live["shown"] >= LIVE_UPDATE_SECONDS:
+            live["shown"] = now
+            rate = live["n"] / max(now - live["t0"], 1e-9)
+            progress_cb(live["frac"], f"{live['label']}: {live['n']:,} texts scored, "
+                                      f"{rate:.0f} a second")
 
     results: dict = {
         "meta": {
@@ -150,6 +169,8 @@ def run_scan(
         "sanity_check": rm.sanity_check(),
     }
 
+    if hasattr(rm, "on_batch"):
+        rm.on_batch = scored
     corpus = nfm.load_corpus()
     nf = None
     for i, name in enumerate(steps):

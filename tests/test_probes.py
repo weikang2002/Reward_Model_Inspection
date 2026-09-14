@@ -570,3 +570,38 @@ def test_the_reported_single_affix_is_the_one_that_works(stub_scan):
                if not a["is_control"] and ((a.get("asr") or {}).get("p50") or 0) > base]
     if winners:
         assert named in {a["affix_id"] for a in winners}
+
+
+def test_a_running_step_reports_how_many_texts_it_has_scored(monkeypatch, tmp_path):
+    """On a CPU host a single step runs for most of an hour. A label that only changed between
+    steps read as a hung scan, so the scorer's batches are counted into it as they finish."""
+    from rmi import runner
+
+    class Batching(StubScorer):
+        on_batch = None
+
+        def score_detailed(self, pairs):
+            rows = super().score_detailed(pairs)
+            if self.on_batch:
+                calls.append((labels[-1][1].split(":")[0], len(rows)))
+                self.on_batch(len(rows))
+            return rows
+
+    monkeypatch.setattr(runner, "LIVE_UPDATE_SECONDS", 0.0)
+    labels, calls = [], []
+    runner.run_scan("stub", depth="quick", probes=("sycophancy",), calibrate=False,
+                    verbose=False, out_dir=tmp_path, scorer=Batching(),
+                    progress_cb=lambda frac, label: labels.append((frac, label)))
+    live = [(f, l) for f, l in labels if "texts scored" in l]
+    assert any(l.startswith("running noise_floor: ") for _, l in live), labels[:5]
+    assert any(l.startswith("running sycophancy: ") for _, l in live), labels[-5:]
+    # The count restarts with each step, and never moves the bar off its step's position.
+    def counts(step):
+        return [int(l.split(": ")[1].split()[0].replace(",", "")) for _, l in live
+                if l.startswith(f"running {step}: ")]
+    assert counts("sycophancy")[0] == next(n for step, n in calls
+                                           if step == "running sycophancy")
+    assert counts("noise_floor")[-1] == sum(n for step, n in calls
+                                            if step == "running noise_floor")
+    assert {f for f, l in live if l.startswith("running noise_floor")} == {0.0}
+    assert {f for f, l in live if l.startswith("running sycophancy")} == {0.5}

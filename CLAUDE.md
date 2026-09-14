@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                    # create .venv and install (pinned via uv.lock)
 uv run streamlit run app.py                # dashboard at http://localhost:8501
-uv run pytest -q                           # 257 tests, ~36s
+uv run pytest -q                           # 259 tests, ~37s
 uv run pytest tests/test_probes.py::test_pure_length_scorer_reports_no_style_bias -q
 uv run pytest -q -k degenerate             # by keyword
 
